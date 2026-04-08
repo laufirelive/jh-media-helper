@@ -58,12 +58,13 @@ class BaseTaskPanel(QWidget):
     """Base class for all task panels. Provides a left-right split layout
     with a scrollable settings sidebar on the right."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, init_layout: bool = True):
         super().__init__(parent)
         self._progress = ProgressSection()
         self._settings_scroll: QScrollArea | None = None
         self._settings_sidebar_root: QWidget | None = None
-        self._init_base_layout()
+        if init_layout:
+            self._init_base_layout()
 
     def _window_bg_color(self):
         """构造阶段可能尚未挂到主窗口，self.palette() 的 Window 仍是默认白；优先用应用级调色板。"""
