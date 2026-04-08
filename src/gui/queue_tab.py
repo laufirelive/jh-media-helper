@@ -18,8 +18,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from src.core.config import PicSeqConfig, TaskStatus, TaskType
+from src.core.config import CombatAudioConfig, PicSeqConfig, TaskStatus, TaskType
 from src.core.encoder_registry import EncoderRegistry
+from src.core.processors import combat_audio
 from src.core.processors.pic_seq import (
     detect_resolution,
     detect_scan_format,
@@ -178,7 +179,15 @@ class QueueTab(QWidget):
             type_item.setForeground(Qt.GlobalColor.gray)
             self._table.setItem(row, 1, type_item)
 
-            fmt_label = _FORMAT_LABELS.get(task.config.get("output_format", ""), "?")
+            if task.task_type == TaskType.COMBAT_AUDIO:
+                if task.config.get("boxed"):
+                    fmt_label = "MKV 封装"
+                elif task.config.get("mix_enabled", True):
+                    fmt_label = "混合音频"
+                else:
+                    fmt_label = "时长对齐"
+            else:
+                fmt_label = _FORMAT_LABELS.get(task.config.get("output_format", ""), "?")
             fmt_item = QTableWidgetItem(fmt_label)
             fmt_item.setForeground(Qt.GlobalColor.gray)
             self._table.setItem(row, 2, fmt_item)
@@ -385,6 +394,18 @@ class QueueTab(QWidget):
                 self._refresh_table()
                 self._run_next()
                 return
+        elif task.task_type == TaskType.COMBAT_AUDIO:
+            cfg = CombatAudioConfig.from_dict(task.config)
+            ok, err = combat_audio.validate(cfg)
+            if not ok:
+                task.status = TaskStatus.FAILED
+                task.error = err
+                self._queue_manager.save()
+                self._refresh_table()
+                self._run_next()
+                return
+            audio_files = cfg.audio_order or [f.filename for f in combat_audio.scan_audio_dir(cfg.audio_dir)]
+            count = len(audio_files)
 
         self._worker = FFmpegWorker(
             task_type=task.task_type,
