@@ -12,7 +12,9 @@ def qapp():
 
 @pytest.fixture
 def section(qapp):
-    return ProgressSection()
+    s = ProgressSection()
+    s.show()  # show parent so child isVisible() works correctly
+    return s
 
 
 def test_initial_state_hidden(section):

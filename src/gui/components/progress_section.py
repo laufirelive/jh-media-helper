@@ -34,8 +34,6 @@ class ProgressSection(QWidget):
         self._status_label.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(self._status_label)
 
-        self.show()
-
     def update_progress(self, current: int, total: int, desc: str = "") -> None:
         self._progress_bar.setVisible(True)
         self._progress_bar.setMaximum(total)
