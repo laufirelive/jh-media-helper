@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from src.core.config import TaskType
 from src.core.data_dir import get_queue_path
 from src.core.encoder_registry import EncoderRegistry
 from src.core.processors.pic_seq import _resolve_output_path
@@ -18,6 +19,7 @@ from src.gui.confirm_dialog import confirm_action
 from src.gui.queue_tab import QueueTab
 from src.gui.settings_tab import SettingsTab
 from src.gui.task_panels.base_panel import BaseTaskPanel
+from src.gui.task_panels.combat_audio_panel import CombatAudioPanel
 from src.gui.task_panels.pic_seq_panel import PicSeqPanel
 from src.worker.ffmpeg_worker import FFmpegWorker
 
@@ -63,7 +65,9 @@ class MainWindow(QMainWindow):
         self._pic_seq_panel = PicSeqPanel(self._encoder_registry)
         self._tabs.addTab(self._pic_seq_panel, "图片序列转视频")
 
-        # Future: M2/M3 tabs will be added here
+        # CombatAudio tab
+        self._combat_panel = CombatAudioPanel()
+        self._tabs.addTab(self._combat_panel, "音视频混合")
 
         # Queue tab
         self._queue_tab = QueueTab(self._queue_manager, self._encoder_registry)
@@ -78,6 +82,7 @@ class MainWindow(QMainWindow):
         self._btn_cancel = self._action_bar.add_button("取消", role="secondary", enabled=False)
         self._btn_enqueue = self._action_bar.add_button("加入队列", role="secondary")
         self._btn_start = self._action_bar.add_button("开始处理", role="primary")
+        self._btn_preview = self._action_bar.add_button("试听混合", role="secondary", enabled=False)
         self._action_bar_wrap = QWidget()
         _abl = QVBoxLayout(self._action_bar_wrap)
         _abl.setContentsMargins(0, 0, 0, 20)
@@ -91,12 +96,19 @@ class MainWindow(QMainWindow):
         self._btn_start.clicked.connect(self._on_start)
         self._btn_cancel.clicked.connect(self._on_cancel)
         self._btn_enqueue.clicked.connect(self._on_enqueue)
+        self._btn_preview.clicked.connect(self._on_preview)
         self._queue_tab.task_count_changed.connect(self._update_queue_badge)
 
     def _on_tab_changed(self, index: int):
         current_widget = self._tabs.widget(index)
         show = isinstance(current_widget, BaseTaskPanel)
         self._action_bar_wrap.setVisible(show)
+        self._btn_preview.setVisible(isinstance(current_widget, CombatAudioPanel))
+
+    def _on_preview(self):
+        panel = self._get_active_panel()
+        if isinstance(panel, CombatAudioPanel):
+            panel.preview_mix()
 
     def _get_active_panel(self) -> BaseTaskPanel | None:
         widget = self._tabs.currentWidget()
@@ -112,8 +124,10 @@ class MainWindow(QMainWindow):
     def _display_name_from_config(config) -> str:
         """从任务配置取简短展示名（用于取消确认文案）。"""
         input_dir = getattr(config, "input_dir", None)
-        if input_dir:
-            return os.path.basename(input_dir.rstrip(os.sep)) or input_dir
+        input_path = getattr(config, "input_path", None)
+        path = input_dir or input_path
+        if path:
+            return os.path.basename(path.rstrip(os.sep)) or path
         return "当前任务"
 
     def _on_start(self):
@@ -189,11 +203,24 @@ class MainWindow(QMainWindow):
         if config is None:
             return
 
-        output_path = _resolve_output_path(config)
+        # Resolve output path based on task type
+        task_type = panel.get_task_type()
+        if task_type == TaskType.PIC_SEQ:
+            output_path = _resolve_output_path(config)
+            input_path = config.input_dir
+        elif task_type == TaskType.COMBAT_AUDIO:
+            from src.core.processors.combat_audio import resolve_output_path as combat_resolve
+            paths = combat_resolve(config, audio_count=count)
+            output_path = paths[0] if paths else ""
+            input_path = config.input_path
+        else:
+            output_path = ""
+            input_path = ""
+
         task = QueueTask.create(
-            task_type=panel.get_task_type(),
+            task_type=task_type,
             config=config,
-            input_path=config.input_dir,
+            input_path=input_path,
             output_path=output_path,
         )
         self._queue_manager.add_task(task)
@@ -220,4 +247,5 @@ class MainWindow(QMainWindow):
             self._worker.wait(3000)
         self._queue_tab.stop()
         self._queue_manager.save()
+        self._combat_panel.cleanup()
         event.accept()
