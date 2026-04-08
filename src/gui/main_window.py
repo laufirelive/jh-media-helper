@@ -1,21 +1,20 @@
 from PyQt6.QtWidgets import (
-    QHBoxLayout,
     QMainWindow,
     QMessageBox,
-    QPushButton,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from src.core.config import TaskType
 from src.core.data_dir import get_queue_path
 from src.core.encoder_registry import EncoderRegistry
+from src.core.processors.pic_seq import _resolve_output_path
 from src.core.queue_manager import QueueManager
 from src.core.queue_task import QueueTask
-from src.core.processors.pic_seq import validate, _resolve_output_path
+from src.gui.components.action_bar import ActionBar
 from src.gui.queue_tab import QueueTab
 from src.gui.settings_tab import SettingsTab
+from src.gui.task_panels.base_panel import BaseTaskPanel
 from src.gui.task_panels.pic_seq_panel import PicSeqPanel
 from src.worker.ffmpeg_worker import FFmpegWorker
 
@@ -39,7 +38,7 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         outer = QVBoxLayout(central)
-        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
         self._tabs = QTabWidget()
@@ -59,18 +58,11 @@ class MainWindow(QMainWindow):
         self._settings_tab = SettingsTab()
         self._tabs.addTab(self._settings_tab, "设置")
 
-        # Bottom action bar
-        self._action_bar = QWidget()
-        action_layout = QHBoxLayout(self._action_bar)
-        action_layout.setContentsMargins(12, 8, 12, 8)
-        action_layout.addStretch()
-        self._btn_cancel = QPushButton("取消")
-        self._btn_cancel.setEnabled(False)
-        self._btn_enqueue = QPushButton("加入队列")
-        self._btn_start = QPushButton("开始处理")
-        action_layout.addWidget(self._btn_cancel)
-        action_layout.addWidget(self._btn_enqueue)
-        action_layout.addWidget(self._btn_start)
+        # Bottom action bar (centered)
+        self._action_bar = ActionBar()
+        self._btn_cancel = self._action_bar.add_button("取消", role="secondary", enabled=False)
+        self._btn_enqueue = self._action_bar.add_button("加入队列", role="secondary")
+        self._btn_start = self._action_bar.add_button("开始处理", role="primary")
         outer.addWidget(self._action_bar)
 
         self._tabs.currentChanged.connect(self._on_tab_changed)
@@ -83,31 +75,40 @@ class MainWindow(QMainWindow):
 
     def _on_tab_changed(self, index: int):
         current_widget = self._tabs.widget(index)
-        self._action_bar.setVisible(isinstance(current_widget, PicSeqPanel))
+        self._action_bar.setVisible(isinstance(current_widget, BaseTaskPanel))
+
+    def _get_active_panel(self) -> BaseTaskPanel | None:
+        widget = self._tabs.currentWidget()
+        if isinstance(widget, BaseTaskPanel):
+            return widget
+        return None
 
     def _update_queue_badge(self, count: int):
         idx = self._tabs.indexOf(self._queue_tab)
         self._tabs.setTabText(idx, f"批量队列 ({count})")
 
     def _on_start(self):
-        config = self._pic_seq_panel.get_config()
-        if config is None:
+        panel = self._get_active_panel()
+        if panel is None:
             return
-        ok, count, err = validate(config)
+        ok, count, err = panel.validate()
         if not ok:
             QMessageBox.warning(self, "校验失败", err)
+            return
+        config = panel.build_config()
+        if config is None:
             return
 
         self._btn_start.setEnabled(False)
         self._btn_cancel.setEnabled(True)
 
         self._worker = FFmpegWorker(
-            task_type=TaskType.PIC_SEQ,
+            task_type=panel.get_task_type(),
             config=config.to_dict(),
             encoder_registry=self._encoder_registry,
             total_frames=count,
         )
-        self._worker.progress.connect(self._pic_seq_panel.on_progress)
+        self._worker.progress.connect(panel.on_progress)
         self._worker.finished.connect(self._on_finished)
         self._worker.error.connect(self._on_error)
         self._worker.start()
@@ -123,7 +124,9 @@ class MainWindow(QMainWindow):
         self._btn_start.setEnabled(True)
         self._btn_cancel.setEnabled(False)
         self._worker = None
-        self._pic_seq_panel.on_finished(output_path)
+        panel = self._get_active_panel()
+        if panel:
+            panel.on_finished(output_path)
 
     def _on_error(self, message: str):
         self._btn_start.setEnabled(True)
@@ -132,17 +135,20 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "错误", message)
 
     def _on_enqueue(self):
-        config = self._pic_seq_panel.get_config()
-        if config is None:
+        panel = self._get_active_panel()
+        if panel is None:
             return
-        ok, count, err = validate(config)
+        ok, count, err = panel.validate()
         if not ok:
             QMessageBox.warning(self, "校验失败", err)
+            return
+        config = panel.build_config()
+        if config is None:
             return
 
         output_path = _resolve_output_path(config)
         task = QueueTask.create(
-            task_type=TaskType.PIC_SEQ,
+            task_type=panel.get_task_type(),
             config=config,
             input_path=config.input_dir,
             output_path=output_path,
