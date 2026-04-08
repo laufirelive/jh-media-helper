@@ -39,26 +39,23 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         outer = QVBoxLayout(central)
-        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(0)
 
         self._tabs = QTabWidget()
         outer.addWidget(self._tabs)
 
-        # Tab 0: Single task
-        self._task_tab = QWidget()
-        task_layout = QVBoxLayout(self._task_tab)
-        task_layout.setContentsMargins(0, 0, 0, 0)
-        task_layout.setSpacing(0)
+        # PicSeq tab
         self._pic_seq_panel = PicSeqPanel(self._encoder_registry)
-        task_layout.addWidget(self._pic_seq_panel, 1)
-        self._tabs.addTab(self._task_tab, "单任务")
+        self._tabs.addTab(self._pic_seq_panel, "图片序列转视频")
 
-        # Tab 1: Queue
+        # Future: M2/M3 tabs will be added here
+
+        # Queue tab
         self._queue_tab = QueueTab(self._queue_manager, self._encoder_registry)
         self._tabs.addTab(self._queue_tab, f"批量队列 ({len(self._queue_manager.tasks)})")
 
-        # Tab 2: Settings
+        # Settings tab
         self._settings_tab = SettingsTab()
         self._tabs.addTab(self._settings_tab, "设置")
 
@@ -85,10 +82,12 @@ class MainWindow(QMainWindow):
         self._queue_tab.task_count_changed.connect(self._update_queue_badge)
 
     def _on_tab_changed(self, index: int):
-        self._action_bar.setVisible(index == 0)
+        current_widget = self._tabs.widget(index)
+        self._action_bar.setVisible(isinstance(current_widget, PicSeqPanel))
 
     def _update_queue_badge(self, count: int):
-        self._tabs.setTabText(1, f"批量队列 ({count})")
+        idx = self._tabs.indexOf(self._queue_tab)
+        self._tabs.setTabText(idx, f"批量队列 ({count})")
 
     def _on_start(self):
         config = self._pic_seq_panel.get_config()
@@ -153,8 +152,6 @@ class MainWindow(QMainWindow):
         self._queue_tab.refresh()
 
     def _check_queue_recovery(self):
-        pending = [t for t in self._queue_manager.tasks if t.status == TaskType.PIC_SEQ or t.status.value == "pending"]
-        # Simplified: just check if there are pending tasks
         pending = [t for t in self._queue_manager.tasks if t.status.value == "pending"]
         if not pending:
             return
