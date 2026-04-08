@@ -1,11 +1,15 @@
+import json
 import os
 import tempfile
+from unittest.mock import patch
 
 from src.core.processors.combat_audio import (
     PURE_AUDIO_EXTENSIONS,
     AudioFileInfo,
     AudioStreamInfo,
     is_pure_audio,
+    probe_audio_streams,
+    probe_duration,
     scan_audio_dir,
 )
 
@@ -98,3 +102,71 @@ class TestScanAudioDir:
             open(os.path.join(d, "bgm_01.aac"), "w").close()
             result = scan_audio_dir(d)
             assert result[0].path == os.path.join(d, "bgm_01.aac")
+
+
+class TestProbeDuration:
+    @patch("subprocess.run")
+    def test_parses_ffprobe_output(self, mock_run):
+        mock_run.return_value.stdout = json.dumps({"format": {"duration": "185.32"}})
+        mock_run.return_value.returncode = 0
+        duration = probe_duration("/path/to/audio.aac")
+        assert duration == 185.32
+
+    @patch("subprocess.run")
+    def test_returns_zero_on_failure(self, mock_run):
+        mock_run.side_effect = FileNotFoundError()
+        duration = probe_duration("/path/to/missing.aac")
+        assert duration == 0.0
+
+    @patch("subprocess.run")
+    def test_returns_zero_on_missing_duration(self, mock_run):
+        mock_run.return_value.stdout = json.dumps({"format": {}})
+        mock_run.return_value.returncode = 0
+        duration = probe_duration("/path/to/audio.aac")
+        assert duration == 0.0
+
+
+class TestProbeAudioStreams:
+    @patch("subprocess.run")
+    def test_parses_ffprobe_output(self, mock_run):
+        mock_run.return_value.stdout = json.dumps({
+            "streams": [
+                {
+                    "index": 1,
+                    "codec_name": "aac",
+                    "sample_rate": "48000",
+                    "channels": 2,
+                    "channel_layout": "stereo",
+                },
+                {
+                    "index": 2,
+                    "codec_name": "ac3",
+                    "sample_rate": "48000",
+                    "channels": 6,
+                    "channel_layout": "5.1",
+                },
+            ]
+        })
+        mock_run.return_value.returncode = 0
+        streams = probe_audio_streams("/path/to/video.mkv")
+        assert len(streams) == 2
+        assert streams[0].index == 1
+        assert streams[0].codec == "aac"
+        assert streams[0].sample_rate == 48000
+        assert streams[0].channels == 2
+        assert streams[0].channel_layout == "stereo"
+        assert streams[1].index == 2
+        assert streams[1].codec == "ac3"
+
+    @patch("subprocess.run")
+    def test_returns_empty_on_failure(self, mock_run):
+        mock_run.side_effect = FileNotFoundError()
+        streams = probe_audio_streams("/path/to/missing.mkv")
+        assert streams == []
+
+    @patch("subprocess.run")
+    def test_returns_empty_on_no_streams(self, mock_run):
+        mock_run.return_value.stdout = json.dumps({"streams": []})
+        mock_run.return_value.returncode = 0
+        streams = probe_audio_streams("/path/to/video.mkv")
+        assert streams == []
