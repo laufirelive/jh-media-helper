@@ -205,23 +205,32 @@ class FFmpegWorker(QThread):
         if config.mix_enabled:
             mixed_dir = os.path.join(tmp_dir, "mixed")
             os.makedirs(mixed_dir)
-            items_with_adjusted = list(zip(audio_files, adjusted_paths))
+            items_with_adjusted = [
+                (name, adj) for name, adj in zip(audio_files, adjusted_paths)
+                if adj is not None
+            ]
+            display_for_mix = [name for name, _ in items_with_adjusted]
             final_paths = self._parallel_phase(
-                config, items_with_adjusted, audio_files, total,
+                config, items_with_adjusted, display_for_mix, len(items_with_adjusted),
                 base_audio, mixed_dir, "混音",
                 lambda cfg, item, idx, base, out_dir: self._mix_one(cfg, item, idx, base, out_dir),
             )
             if final_paths is None:
                 return
         else:
-            final_paths = adjusted_paths
+            final_paths = [p for p in adjusted_paths if p is not None]
+
+        # Filter out None results from failed items
+        final_paths = [p for p in final_paths if p is not None]
 
         if self._emit_cancelled_if_needed():
             return
 
         # Phase 4: Mux to MKV (optional)
-        output_paths = combat_audio.resolve_output_path(config, audio_count=total)
+        output_paths = combat_audio.resolve_output_path(config, audio_count=len(final_paths))
         if config.boxed and not is_audio:
+            out_dir = os.path.dirname(output_paths[0])
+            os.makedirs(out_dir, exist_ok=True)
             self.progress.emit(total, total, f"[{total}/{total}] — 封装MKV")
             cmd = combat_audio.build_mux_command(
                 config.input_path, final_paths, output_paths[0],
@@ -260,7 +269,11 @@ class FFmpegWorker(QThread):
                     pool.shutdown(wait=False, cancel_futures=True)
                     self.error.emit("已取消")
                     return None
-                idx, path = future.result()
+                try:
+                    idx, path = future.result()
+                except Exception:
+                    completed += 1
+                    continue
                 results[idx] = path
                 completed += 1
                 self.progress.emit(
@@ -279,6 +292,8 @@ class FFmpegWorker(QThread):
         )
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         proc.wait()
+        if proc.returncode != 0:
+            raise RuntimeError(f"时长调整失败: {filename}")
         return output_path
 
     def _mix_one(self, config, item, idx, base_audio, out_dir):
@@ -290,4 +305,6 @@ class FFmpegWorker(QThread):
         )
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         proc.wait()
+        if proc.returncode != 0:
+            raise RuntimeError(f"混音失败: {filename}")
         return output_path

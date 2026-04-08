@@ -98,6 +98,7 @@ class MainWindow(QMainWindow):
         self._btn_enqueue.clicked.connect(self._on_enqueue)
         self._btn_preview.clicked.connect(self._on_preview)
         self._queue_tab.task_count_changed.connect(self._update_queue_badge)
+        self._combat_panel.preview_enabled_changed.connect(self._btn_preview.setEnabled)
 
     def _on_tab_changed(self, index: int):
         current_widget = self._tabs.widget(index)

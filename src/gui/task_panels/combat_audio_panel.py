@@ -3,7 +3,9 @@ import os
 import subprocess
 import tempfile
 
-from PyQt6.QtCore import Qt
+import shutil
+
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -32,11 +34,14 @@ _MEDIA_FILTER = "媒体文件 (*.mp4 *.mkv *.mov *.avi *.aac *.mp3 *.wav *.flac)
 
 
 class CombatAudioPanel(BaseTaskPanel):
+    preview_enabled_changed = pyqtSignal(bool)
+
     def __init__(self, parent=None):
         self._input_streams: list[combat_audio.AudioStreamInfo] = []
         self._bg_files: list[combat_audio.AudioFileInfo] = []
         self._is_pure_audio = False
         self._input_duration = 0.0
+        self._preview_temp_dir: str | None = None
         super().__init__(parent, init_layout=False)
         self._init_custom_layout()
 
@@ -68,6 +73,10 @@ class CombatAudioPanel(BaseTaskPanel):
         main.addWidget(self._progress)
 
         main.addStretch()
+
+        # Connect signals for preview button auto-enable
+        self._track_radio_group.buttonClicked.connect(lambda _: self._emit_preview_state())
+        self._bg_table.selectionModel().selectionChanged.connect(lambda *_: self._emit_preview_state())
 
     def _build_upper_left(self, parent_layout: QHBoxLayout):
         left = QVBoxLayout()
@@ -259,6 +268,7 @@ class CombatAudioPanel(BaseTaskPanel):
     def _on_mix_toggled(self, checked: bool):
         self._volume_spin.setEnabled(checked)
         self._update_param_states()
+        self._emit_preview_state()
 
     def _update_param_states(self):
         """Update parameter enable/disable states based on current selections."""
@@ -270,6 +280,9 @@ class CombatAudioPanel(BaseTaskPanel):
         self._boxed_checkbox.setEnabled(not is_audio)
         if is_audio:
             self._boxed_checkbox.setChecked(False)
+
+    def _emit_preview_state(self):
+        self.preview_enabled_changed.emit(self.get_preview_btn_enabled())
 
     def _update_info_bg_count(self):
         text = self._info_label.text()
@@ -363,10 +376,16 @@ class CombatAudioPanel(BaseTaskPanel):
 
     def _on_bg_row_moved(self, logical: int, old_visual: int, new_visual: int):
         """Reorder _bg_files after drag-drop and refresh numbering."""
-        if old_visual < len(self._bg_files):
-            item = self._bg_files.pop(old_visual)
-            self._bg_files.insert(new_visual, item)
-            self._refresh_bg_table()
+        if old_visual < 0 or old_visual >= len(self._bg_files):
+            return
+        if new_visual < 0 or new_visual >= len(self._bg_files):
+            return
+        # Build the new order from visual → logical mapping
+        order = list(range(len(self._bg_files)))
+        item = order.pop(old_visual)
+        order.insert(new_visual, item)
+        self._bg_files = [self._bg_files[i] for i in order]
+        self._refresh_bg_table()
 
     # --- Preview mix ---
 
@@ -393,17 +412,19 @@ class CombatAudioPanel(BaseTaskPanel):
         bg_path = self._bg_files[bg_row].path
         volume = self._volume_spin.value()
 
-        temp_dir = tempfile.mkdtemp(prefix="jh_preview_")
+        # Clean up previous preview temp dir
+        self._cleanup_preview_temp()
+        self._preview_temp_dir = tempfile.mkdtemp(prefix="jh_preview_")
 
         # If video input, extract selected audio track first
         if not self._is_pure_audio:
-            base_audio = os.path.join(temp_dir, "base.aac")
+            base_audio = os.path.join(self._preview_temp_dir, "base.aac")
             cmd = combat_audio.build_extract_command(input_path, stream_idx, base_audio)
             subprocess.run(cmd, capture_output=True, timeout=30)
         else:
             base_audio = input_path
 
-        preview_path = os.path.join(temp_dir, "preview.aac")
+        preview_path = os.path.join(self._preview_temp_dir, "preview.aac")
         cmd = combat_audio.build_preview_command(base_audio, bg_path, volume, preview_path)
         subprocess.run(cmd, capture_output=True, timeout=30)
 
@@ -484,7 +505,13 @@ class CombatAudioPanel(BaseTaskPanel):
             audio_order=audio_order,
         )
 
+    def _cleanup_preview_temp(self):
+        if self._preview_temp_dir and os.path.isdir(self._preview_temp_dir):
+            shutil.rmtree(self._preview_temp_dir, ignore_errors=True)
+            self._preview_temp_dir = None
+
     def cleanup(self):
-        """Clean up player temp files."""
+        """Clean up player and preview temp files."""
         self._player.cleanup()
+        self._cleanup_preview_temp()
 
