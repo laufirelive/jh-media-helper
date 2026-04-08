@@ -1,7 +1,10 @@
 import json
 import os
 import subprocess
+import time
 from dataclasses import dataclass
+
+from src.core.config import CombatAudioConfig
 
 PURE_AUDIO_EXTENSIONS = {".aac", ".mp3", ".wav", ".flac"}
 
@@ -201,3 +204,39 @@ def build_preview_command(
         "-b:a", "192k",
         output_path,
     ]
+
+
+def validate(config: CombatAudioConfig) -> tuple[bool, str | None]:
+    """Validate config before processing. Returns (ok, error_message)."""
+    if not os.path.exists(config.input_path):
+        return False, f"输入文件不存在: {config.input_path}"
+
+    if not os.path.isdir(config.audio_dir):
+        return False, f"音频文件夹不存在: {config.audio_dir}"
+
+    audio_files = scan_audio_dir(config.audio_dir)
+    if not audio_files:
+        return False, f"音频文件夹为空: {config.audio_dir}"
+
+    return True, None
+
+
+def resolve_output_path(config: CombatAudioConfig, audio_count: int) -> list[str]:
+    """Resolve output file paths based on config."""
+    input_stem = os.path.splitext(os.path.basename(config.input_path))[0]
+
+    if config.output_dir:
+        output_dir = config.output_dir
+    else:
+        output_dir = os.path.dirname(config.input_path)
+
+    if config.boxed:
+        return [os.path.join(output_dir, f"{input_stem}.mkv")]
+
+    suffix = "mixed" if config.mix_enabled else "aligned"
+    paths = []
+    for i in range(audio_count):
+        filename = f"{input_stem}_{suffix}_{i:02d}.aac"
+        paths.append(os.path.join(output_dir, filename))
+
+    return paths

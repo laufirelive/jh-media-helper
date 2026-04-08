@@ -3,6 +3,7 @@ import os
 import tempfile
 from unittest.mock import patch
 
+from src.core.config import CombatAudioConfig
 from src.core.processors.combat_audio import (
     PURE_AUDIO_EXTENSIONS,
     AudioFileInfo,
@@ -15,7 +16,9 @@ from src.core.processors.combat_audio import (
     is_pure_audio,
     probe_audio_streams,
     probe_duration,
+    resolve_output_path,
     scan_audio_dir,
+    validate,
 )
 
 
@@ -256,3 +259,95 @@ class TestBuildPreviewCommand:
         filter_str = " ".join(cmd)
         assert "atrim=0:5" in filter_str
         assert filter_str.count("atrim=0:5") == 2
+
+
+class TestValidate:
+    def test_missing_input(self):
+        with tempfile.TemporaryDirectory() as d:
+            audio_dir = os.path.join(d, "audio")
+            os.makedirs(audio_dir)
+            open(os.path.join(audio_dir, "bgm.aac"), "w").close()
+            cfg = CombatAudioConfig(input_path="/nonexistent/video.mkv", audio_dir=audio_dir)
+            ok, err = validate(cfg)
+            assert ok is False
+            assert err is not None
+
+    def test_missing_audio_dir(self):
+        with tempfile.TemporaryDirectory() as d:
+            video_path = os.path.join(d, "video.mkv")
+            open(video_path, "w").close()
+            cfg = CombatAudioConfig(input_path=video_path, audio_dir="/nonexistent/audio")
+            ok, err = validate(cfg)
+            assert ok is False
+            assert err is not None
+
+    def test_empty_audio_dir(self):
+        with tempfile.TemporaryDirectory() as d:
+            video_path = os.path.join(d, "video.mkv")
+            audio_dir = os.path.join(d, "audio")
+            os.makedirs(audio_dir)
+            open(video_path, "w").close()
+            cfg = CombatAudioConfig(input_path=video_path, audio_dir=audio_dir)
+            ok, err = validate(cfg)
+            assert ok is False
+            assert err is not None
+
+    def test_success(self):
+        with tempfile.TemporaryDirectory() as d:
+            video_path = os.path.join(d, "video.mkv")
+            audio_dir = os.path.join(d, "audio")
+            os.makedirs(audio_dir)
+            open(video_path, "w").close()
+            open(os.path.join(audio_dir, "bgm.aac"), "w").close()
+            cfg = CombatAudioConfig(input_path=video_path, audio_dir=audio_dir)
+            ok, err = validate(cfg)
+            assert ok is True
+            assert err is None
+
+    def test_empty_audio_order_uses_scan(self):
+        with tempfile.TemporaryDirectory() as d:
+            video_path = os.path.join(d, "video.mkv")
+            audio_dir = os.path.join(d, "audio")
+            os.makedirs(audio_dir)
+            open(video_path, "w").close()
+            open(os.path.join(audio_dir, "bgm_02.aac"), "w").close()
+            open(os.path.join(audio_dir, "bgm_01.mp3"), "w").close()
+            cfg = CombatAudioConfig(input_path=video_path, audio_dir=audio_dir, audio_order=[])
+            ok, err = validate(cfg)
+            assert ok is True
+
+
+class TestResolveOutputPath:
+    def test_mixed_no_box(self):
+        with tempfile.TemporaryDirectory() as d:
+            video_path = os.path.join(d, "episode_01.mkv")
+            cfg = CombatAudioConfig(input_path=video_path, audio_dir="/audio", mix_enabled=True, boxed=False)
+            paths = resolve_output_path(cfg, 2)
+            assert len(paths) == 2
+            assert paths[0].endswith("episode_01_mixed_00.aac")
+            assert paths[1].endswith("episode_01_mixed_01.aac")
+
+    def test_aligned_no_box(self):
+        with tempfile.TemporaryDirectory() as d:
+            video_path = os.path.join(d, "episode_01.mkv")
+            cfg = CombatAudioConfig(input_path=video_path, audio_dir="/audio", mix_enabled=False, boxed=False)
+            paths = resolve_output_path(cfg, 2)
+            assert len(paths) == 2
+            assert paths[0].endswith("episode_01_aligned_00.aac")
+            assert paths[1].endswith("episode_01_aligned_01.aac")
+
+    def test_boxed(self):
+        with tempfile.TemporaryDirectory() as d:
+            video_path = os.path.join(d, "episode_01.mkv")
+            cfg = CombatAudioConfig(input_path=video_path, audio_dir="/audio", boxed=True)
+            paths = resolve_output_path(cfg, 2)
+            assert len(paths) == 1
+            assert paths[0].endswith(".mkv")
+
+    def test_uses_output_dir(self):
+        with tempfile.TemporaryDirectory() as d:
+            video_path = os.path.join(d, "episode_01.mkv")
+            output_dir = os.path.join(d, "output")
+            cfg = CombatAudioConfig(input_path=video_path, audio_dir="/audio", output_dir=output_dir, boxed=False)
+            paths = resolve_output_path(cfg, 1)
+            assert paths[0].startswith(output_dir)
