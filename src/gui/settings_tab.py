@@ -27,7 +27,6 @@ class SettingsTab(QWidget):
 
         dir_row = QHBoxLayout()
         dir_label = QLabel(f"路径: {resolve_data_dir()}")
-        dir_label.setStyleSheet("color: #ccc;")
         dir_row.addWidget(dir_label)
         dir_row.addStretch()
         open_btn = QPushButton("打开")
@@ -47,7 +46,6 @@ class SettingsTab(QWidget):
         about_layout.setSpacing(4)
 
         name_label = QLabel("jh-media-helper v0.1")
-        name_label.setStyleSheet("color: #ccc; font-weight: bold;")
         about_layout.addWidget(name_label)
 
         desc_label = QLabel("影视后期媒体处理工具")

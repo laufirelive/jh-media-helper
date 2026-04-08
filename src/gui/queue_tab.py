@@ -1,7 +1,7 @@
 import os
 import time
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -29,6 +29,7 @@ from src.core.processors.pic_seq import (
 from src.core.queue_manager import QueueManager
 from src.core.queue_task import QueueTask
 from src.gui.components.action_bar import ActionBar
+from src.gui.confirm_dialog import confirm_action
 from src.gui.components.progress_section import ProgressSection
 from src.worker.ffmpeg_worker import FFmpegWorker
 
@@ -53,20 +54,9 @@ _STATUS_COLORS = {
 }
 
 _TABLE_QSS = """
-QTableWidget {
-    border: 1px solid #555;
-    border-radius: 4px;
-    gridline-color: #333;
-    alternate-background-color: #1e1e2e;
-}
-QTableWidget::item {
-    padding: 4px 8px;
-}
 QHeaderView::section {
-    background: #2a2a3a;
-    color: #888;
     border: none;
-    border-bottom: 1px solid #555;
+    border-bottom: 1px solid palette(mid);
     padding: 6px 8px;
     font-weight: bold;
 }
@@ -81,10 +71,12 @@ class QueueTab(QWidget):
         self._queue_manager = queue_manager
         self._encoder_registry = encoder_registry
         self._worker: FFmpegWorker | None = None
+        self._cancelling_task_id: str | None = None
         self._running = False
         self._last_refresh_time = 0.0
         self.setAcceptDrops(True)
         self._init_ui()
+        self._table.viewport().installEventFilter(self)
         self._refresh_table()
 
     def _init_ui(self):
@@ -105,7 +97,7 @@ class QueueTab(QWidget):
         self._table.verticalHeader().setSectionsMovable(True)
         self._table.verticalHeader().sectionMoved.connect(self._on_row_moved)
         self._table.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
-        self._table.setAlternatingRowColors(True)
+        self._table.setAlternatingRowColors(False)
         self._table.setStyleSheet(_TABLE_QSS)
         self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._show_context_menu)
@@ -116,15 +108,14 @@ class QueueTab(QWidget):
         empty_layout = QVBoxLayout(self._empty_widget)
         empty_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         empty_icon = QLabel("📋")
-        empty_icon.setStyleSheet("font-size: 32px; color: #666;")
         empty_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         empty_layout.addWidget(empty_icon)
         empty_title = QLabel("队列为空")
-        empty_title.setStyleSheet("color: #888; font-size: 14px;")
+        empty_title.setStyleSheet("color: gray;")
         empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         empty_layout.addWidget(empty_title)
         empty_hint = QLabel("在任务面板中点击「加入队列」添加任务，或拖入文件夹")
-        empty_hint.setStyleSheet("color: #666; font-size: 11px;")
+        empty_hint.setStyleSheet("color: gray; font-size: 11px;")
         empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         empty_layout.addWidget(empty_hint)
 
@@ -134,11 +125,10 @@ class QueueTab(QWidget):
 
         info_row = QHBoxLayout()
         self._current_label = QLabel("")
-        self._current_label.setStyleSheet("color: #ccc; font-weight: bold;")
         info_row.addWidget(self._current_label)
         info_row.addStretch()
         self._task_count_label = QLabel("")
-        self._task_count_label.setStyleSheet("color: gray; font-size: 11px;")
+        self._task_count_label.setStyleSheet("color: gray;")
         info_row.addWidget(self._task_count_label)
         progress_layout.addLayout(info_row)
 
@@ -146,7 +136,7 @@ class QueueTab(QWidget):
         progress_layout.addWidget(self._progress)
 
         self._total_label = QLabel("")
-        self._total_label.setStyleSheet("color: gray; font-size: 11px;")
+        self._total_label.setStyleSheet("color: gray;")
         self._total_label.setAlignment(Qt.AlignmentFlag.AlignRight)
         progress_layout.addWidget(self._total_label)
 
@@ -158,6 +148,7 @@ class QueueTab(QWidget):
         self._btn_start.clicked.connect(self._on_start)
         self._btn_cancel = self._action_bar.add_button("取消当前", role="danger", enabled=False)
         self._btn_cancel.clicked.connect(self._on_cancel_current)
+        self._table.itemSelectionChanged.connect(self._update_cancel_button_state)
         self._btn_clear = self._action_bar.add_button("清空队列", role="secondary")
         self._btn_clear.clicked.connect(self._on_clear)
         layout.addWidget(self._action_bar)
@@ -175,6 +166,8 @@ class QueueTab(QWidget):
 
             display_name = os.path.basename(task.input_path.rstrip(os.sep)) or task.input_path
             name_item = QTableWidgetItem(display_name)
+            # 供拖放后对账顺序，避免与 QueueManager 脱节
+            name_item.setData(Qt.ItemDataRole.UserRole, task.id)
             if task.status == TaskStatus.PROCESSING:
                 font = name_item.font()
                 font.setBold(True)
@@ -197,6 +190,30 @@ class QueueTab(QWidget):
             self._table.setItem(row, 3, status_item)
 
         self.task_count_changed.emit(len(tasks))
+        self._update_cancel_button_state()
+
+    def _update_cancel_button_state(self):
+        """有 worker 时可取消当前编码；无 worker 时可取消（移除）表格中选中的非进行中任务。"""
+        if self._worker:
+            self._btn_cancel.setText("取消当前")
+            self._btn_cancel.setEnabled(True)
+            return
+        self._btn_cancel.setText("取消所选")
+        rows = self._table.selectionModel().selectedRows()
+        if not rows:
+            self._btn_cancel.setEnabled(False)
+            return
+        row = rows[0].row()
+        tasks = self._queue_manager.tasks
+        if row < 0 or row >= len(tasks):
+            self._btn_cancel.setEnabled(False)
+            return
+        task = tasks[row]
+        # 进行中应由 worker 分支处理；无 worker 时若仍为 PROCESSING 则禁止误删
+        if task.status == TaskStatus.PROCESSING:
+            self._btn_cancel.setEnabled(False)
+            return
+        self._btn_cancel.setEnabled(True)
 
     def _status_text(self, task) -> str:
         if task.status == TaskStatus.COMPLETED:
@@ -216,6 +233,12 @@ class QueueTab(QWidget):
         if hasattr(self, '_empty_widget'):
             self._empty_widget.setGeometry(self._table.rect())
 
+    def eventFilter(self, obj, event):
+        # 表格内部拖放落到空白处时，sectionMoved 可能不触发；在 Drop 之后按行内 task id 与队列对账
+        if obj is self._table.viewport() and event.type() == QEvent.Type.Drop:
+            QTimer.singleShot(0, self._reconcile_order_after_drop)
+        return super().eventFilter(obj, event)
+
     # --- Drag and drop ---
 
     def _on_row_moved(self, logical: int, old_visual: int, new_visual: int):
@@ -226,11 +249,37 @@ class QueueTab(QWidget):
             self._queue_manager.save()
             self._refresh_table()
 
+    def _reconcile_order_after_drop(self):
+        """根据表格当前行顺序与 QueueManager 对齐（修复内部拖放未同步导致丢失/错位）。"""
+        tasks = self._queue_manager.tasks
+        if self._table.rowCount() != len(tasks):
+            self._refresh_table()
+            return
+        ids: list[str] = []
+        for row in range(self._table.rowCount()):
+            item = self._table.item(row, 0)
+            tid = item.data(Qt.ItemDataRole.UserRole) if item else None
+            if not tid:
+                self._refresh_table()
+                return
+            ids.append(tid)
+        if ids == [t.id for t in tasks]:
+            return
+        if self._queue_manager.reorder_tasks(ids):
+            self._queue_manager.save()
+        self._refresh_table()
+
     def dragEnterEvent(self, event):
+        # 仅接受 Finder 等外部文件拖入；无 URL 的拖放交给子控件（表格内部排序）处理
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
+        else:
+            event.ignore()
 
     def dropEvent(self, event):
+        if not event.mimeData().hasUrls():
+            event.ignore()
+            return
         for url in event.mimeData().urls():
             path = url.toLocalFile()
             if os.path.isdir(path):
@@ -304,9 +353,9 @@ class QueueTab(QWidget):
     def _on_start(self):
         self._running = True
         self._btn_start.setEnabled(False)
-        self._btn_cancel.setEnabled(True)
         self._btn_clear.setEnabled(False)
         self._run_next()
+        self._update_cancel_button_state()
 
     def _run_next(self):
         if not self._running:
@@ -318,6 +367,7 @@ class QueueTab(QWidget):
             return
 
         task.status = TaskStatus.PROCESSING
+        task.error = None
         self._queue_manager.save()
         self._refresh_table()
 
@@ -352,6 +402,7 @@ class QueueTab(QWidget):
             lambda msg, tid=task.id: self._on_task_error(tid, msg)
         )
         self._worker.start()
+        self._cancelling_task_id = None
 
     def _on_task_progress(self, task_id: str, current: int, total: int, desc: str):
         task = self._queue_manager.get_task(task_id)
@@ -394,24 +445,71 @@ class QueueTab(QWidget):
         task = self._queue_manager.get_task(task_id)
         if task:
             task.status = TaskStatus.COMPLETED
+            task.error = None
+        self._cancelling_task_id = None
         self._queue_manager.save()
         self._refresh_table()
         self._worker = None
         self._run_next()
 
     def _on_task_error(self, task_id: str, message: str):
-        task = self._queue_manager.get_task(task_id)
-        if task:
-            task.status = TaskStatus.FAILED
-            task.error = message
+        # 用户取消：从队列中移除该条，避免列表里仍占一行
+        is_cancel = message == "已取消" or self._cancelling_task_id == task_id
+        if is_cancel:
+            self._queue_manager.remove_task(task_id)
+        else:
+            task = self._queue_manager.get_task(task_id)
+            if task:
+                task.status = TaskStatus.FAILED
+                task.error = message
+        self._cancelling_task_id = None
         self._queue_manager.save()
         self._refresh_table()
         self._worker = None
         self._run_next()
 
     def _on_cancel_current(self):
+        # 队列正在跑 FFmpeg：终止当前进程并从队列移除该条
         if self._worker:
+            task = next((t for t in self._queue_manager.tasks if t.status == TaskStatus.PROCESSING), None)
+            display_name = (
+                os.path.basename(task.input_path.rstrip(os.sep)) or task.input_path
+                if task
+                else "当前任务"
+            )
+            if not confirm_action(
+                self,
+                "确认取消",
+                f"确定取消任务「{display_name}」并从队列中移除吗？",
+                default_confirm=False,
+            ):
+                return
+            self._cancelling_task_id = task.id if task else None
             self._worker.cancel()
+            return
+
+        # 未运行：按选中行从队列移除（等待中 / 已完成等均可清理）
+        rows = self._table.selectionModel().selectedRows()
+        if not rows:
+            return
+        row = rows[0].row()
+        tasks = self._queue_manager.tasks
+        if row < 0 or row >= len(tasks):
+            return
+        task = tasks[row]
+        if task.status == TaskStatus.PROCESSING:
+            return
+        display_name = os.path.basename(task.input_path.rstrip(os.sep)) or task.input_path
+        if not confirm_action(
+            self,
+            "确认取消",
+            f"确定从队列中移除任务「{display_name}」吗？",
+            default_confirm=False,
+        ):
+            return
+        self._queue_manager.remove_task(task.id)
+        self._queue_manager.save()
+        self._refresh_table()
 
     def _on_clear(self):
         reply = QMessageBox.question(
@@ -436,8 +534,8 @@ class QueueTab(QWidget):
     def _on_queue_stopped(self):
         self._running = False
         self._btn_start.setEnabled(True)
-        self._btn_cancel.setEnabled(False)
         self._btn_clear.setEnabled(True)
+        self._update_cancel_button_state()
 
     def refresh(self):
         self._refresh_table()

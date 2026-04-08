@@ -37,6 +37,16 @@ class QueueManager:
         new_index = max(0, min(new_index, len(self._tasks)))
         self._tasks.insert(new_index, task)
 
+    def reorder_tasks(self, ordered_ids: list[str]) -> bool:
+        """按 ordered_ids 重排任务列表；集合不一致时返回 False 且不修改。"""
+        if len(ordered_ids) != len(self._tasks):
+            return False
+        by_id = {t.id: t for t in self._tasks}
+        if set(ordered_ids) != set(by_id.keys()):
+            return False
+        self._tasks = [by_id[i] for i in ordered_ids]
+        return True
+
     def clear_all(self) -> None:
         self._tasks.clear()
 

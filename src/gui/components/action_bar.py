@@ -1,20 +1,15 @@
 from PyQt6.QtWidgets import QHBoxLayout, QPushButton, QWidget
 
-_ROLE_STYLES = {
-    "primary": "QPushButton { background-color: #33aa66; color: white; border: none; padding: 5px 16px; border-radius: 3px; }",
-    "danger": "QPushButton { background-color: #cc4444; color: white; border: none; padding: 5px 16px; border-radius: 3px; }",
-}
-
 
 class ActionBar(QWidget):
-    """Centered button row with role-based styling."""
+    """居中按钮行。不设置 QSS，按钮使用系统原生样式（与 birefnet-gui 一致）。"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._layout = QHBoxLayout(self)
         self._layout.setContentsMargins(16, 8, 16, 8)
+        self._layout.setSpacing(10)
         self._layout.addStretch()
-        # Buttons will be inserted before the trailing stretch
         self._layout.addStretch()
 
     def add_button(
@@ -23,11 +18,8 @@ class ActionBar(QWidget):
         role: str = "secondary",
         enabled: bool = True,
     ) -> QPushButton:
+        # role 仅保留兼容调用方（primary / danger / secondary），外观由系统主题决定
         btn = QPushButton(text)
         btn.setEnabled(enabled)
-        style = _ROLE_STYLES.get(role, "")
-        if style:
-            btn.setStyleSheet(style)
-        # Insert before the trailing stretch
         self._layout.insertWidget(self._layout.count() - 1, btn)
         return btn

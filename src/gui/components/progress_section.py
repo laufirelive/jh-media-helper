@@ -2,9 +2,7 @@ from PyQt6.QtWidgets import QLabel, QProgressBar, QVBoxLayout, QWidget
 
 _PROGRESS_QSS = """
 QProgressBar {
-    border: 1px solid #444;
     border-radius: 3px;
-    background: #333;
     max-height: 6px;
     text-align: center;
 }
@@ -31,7 +29,7 @@ class ProgressSection(QWidget):
         layout.addWidget(self._progress_bar)
 
         self._status_label = QLabel("")
-        self._status_label.setStyleSheet("color: gray; font-size: 11px;")
+        self._status_label.setStyleSheet("color: gray;")
         layout.addWidget(self._status_label)
 
     def update_progress(self, current: int, total: int, desc: str = "") -> None:

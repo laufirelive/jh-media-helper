@@ -41,6 +41,26 @@ class FFmpegWorker(QThread):
         self._cancel_event = threading.Event()
         self._process: subprocess.Popen | None = None
 
+    def _emit_cancelled_if_needed(self) -> bool:
+        """若已请求取消则发出 error 并返回 True（用于 Popen 前等阶段及时退出）。"""
+        if self._cancel_event.is_set():
+            self.error.emit("已取消")
+            return True
+        return False
+
+    def _terminate_process(self) -> None:
+        """优先温和终止，超时后强制 kill，确保取消操作可见生效。"""
+        if self._process is None:
+            return
+        if self._process.poll() is not None:
+            return
+        self._process.terminate()
+        try:
+            self._process.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            self._process.kill()
+            self._process.wait(timeout=1.0)
+
     def run(self):
         try:
             if self._task_type == TaskType.PIC_SEQ:
@@ -51,8 +71,15 @@ class FFmpegWorker(QThread):
             self.error.emit(str(e))
 
     def _run_pic_seq(self):
+        # 在尚未启动 ffmpeg 前也可取消；否则用户点「取消」无任何信号，界面不会恢复
+        if self._emit_cancelled_if_needed():
+            return
         config = PicSeqConfig.from_dict(self._config)
+        if self._emit_cancelled_if_needed():
+            return
         has_alpha = pic_seq.detect_alpha(config.input_dir, config.scan_format)
+        if self._emit_cancelled_if_needed():
+            return
 
         if config.output_format == OutputFormat.MOV_PRORES:
             encoder = "prores_ks"
@@ -62,18 +89,21 @@ class FFmpegWorker(QThread):
             encoder = self._encoder_registry.get_fallback()
 
         cmd = pic_seq.build_command(config, encoder=encoder, has_alpha=has_alpha)
+        if self._emit_cancelled_if_needed():
+            return
         success = self._exec_ffmpeg(cmd)
+        if self._emit_cancelled_if_needed():
+            return
 
         if not success and encoder != self._encoder_registry.get_fallback() and config.output_format != OutputFormat.MOV_PRORES:
-            if self._cancel_event.is_set():
-                return
             fallback = self._encoder_registry.get_fallback()
             self.progress.emit(0, self._total_frames, f"回退到 {fallback}")
             cmd = pic_seq.build_command(config, encoder=fallback, has_alpha=has_alpha)
             success = self._exec_ffmpeg(cmd)
+            if self._emit_cancelled_if_needed():
+                return
 
-        if self._cancel_event.is_set():
-            self.error.emit("已取消")
+        if self._emit_cancelled_if_needed():
             return
 
         if success:
@@ -83,6 +113,9 @@ class FFmpegWorker(QThread):
             self.error.emit("FFmpeg 编码失败")
 
     def _exec_ffmpeg(self, cmd: list[str]) -> bool:
+        # 启动子进程前再检查，避免已取消仍去 Popen
+        if self._cancel_event.is_set():
+            return False
         self._process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -90,8 +123,7 @@ class FFmpegWorker(QThread):
         )
         for raw_line in self._process.stderr:
             if self._cancel_event.is_set():
-                self._process.terminate()
-                self._process.wait()
+                self._terminate_process()
                 return False
             line = raw_line.decode("utf-8", errors="replace").strip()
             frame = parse_progress(line)
@@ -102,5 +134,4 @@ class FFmpegWorker(QThread):
 
     def cancel(self):
         self._cancel_event.set()
-        if self._process:
-            self._process.terminate()
+        self._terminate_process()

@@ -30,22 +30,11 @@ def test_buttons_centered(bar):
     assert layout.itemAt(layout.count() - 1).widget() is None  # stretch
 
 
-def test_primary_role(bar):
-    btn = bar.add_button("开始", role="primary")
-    ss = btn.styleSheet()
-    assert "#33aa66" in ss or "#3a6" in ss or "33aa66" in ss
-
-
-def test_danger_role(bar):
-    btn = bar.add_button("取消", role="danger")
-    ss = btn.styleSheet()
-    assert "#cc4444" in ss or "#c44" in ss or "cc4444" in ss
-
-
-def test_secondary_role_is_default(bar):
-    btn = bar.add_button("清空")
-    # Secondary has no special stylesheet (uses Qt default)
-    assert btn.styleSheet() == ""
+def test_roles_use_native_style(bar):
+    """与 birefnet-gui 一致：不套 QSS，由系统绘制按钮。"""
+    for role in ("primary", "danger", "secondary"):
+        btn = bar.add_button("x", role=role)
+        assert btn.styleSheet() == ""
 
 
 def test_disabled_button(bar):
