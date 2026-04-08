@@ -98,10 +98,10 @@ def probe_audio_streams(file_path: str) -> list[AudioStreamInfo]:
             streams.append(
                 AudioStreamInfo(
                     index=stream["index"],
-                    codec=stream["codec_name"],
-                    sample_rate=int(stream["sample_rate"]),
-                    channels=stream["channels"],
-                    channel_layout=stream["channel_layout"],
+                    codec=stream.get("codec_name", "unknown"),
+                    sample_rate=int(stream.get("sample_rate", 0)),
+                    channels=stream.get("channels", 0),
+                    channel_layout=stream.get("channel_layout", ""),
                 )
             )
         return streams
@@ -150,12 +150,13 @@ def build_mix_command(
     filter_complex = (
         f"[0:a]{_LOUDNORM}[main];"
         f"[1:a]{_LOUDNORM}[bg];"
-        f"[main][bg]amix=inputs=2:weights={volume} 1,volume=2,{_LOUDNORM}"
+        f"[main][bg]amix=inputs=2:duration=first:dropout_transition=1:weights={volume} 1:normalize=0,volume=2,{_LOUDNORM}"
     )
 
     return [
         "ffmpeg",
         "-y",
+        "-hwaccel", "auto",
         "-i", base_audio,
         "-i", bg_audio,
         "-filter_complex", filter_complex,
@@ -191,12 +192,13 @@ def build_preview_command(
     filter_complex = (
         f"[0:a]atrim=0:5,{_LOUDNORM}[main];"
         f"[1:a]atrim=0:5,{_LOUDNORM}[bg];"
-        f"[main][bg]amix=inputs=2:weights={volume} 1,volume=2,{_LOUDNORM}"
+        f"[main][bg]amix=inputs=2:duration=first:dropout_transition=1:weights={volume} 1:normalize=0,volume=2,{_LOUDNORM}"
     )
 
     return [
         "ffmpeg",
         "-y",
+        "-hwaccel", "auto",
         "-i", base_audio,
         "-i", bg_audio,
         "-filter_complex", filter_complex,
@@ -231,7 +233,8 @@ def resolve_output_path(config: CombatAudioConfig, audio_count: int) -> list[str
         output_dir = os.path.dirname(config.input_path)
 
     if config.boxed:
-        return [os.path.join(output_dir, f"{input_stem}.mkv")]
+        ts = time.strftime("%Y%m%d%H%M%S")
+        return [os.path.join(output_dir, f"{input_stem}_{ts}.mkv")]
 
     suffix = "mixed" if config.mix_enabled else "aligned"
     paths = []
