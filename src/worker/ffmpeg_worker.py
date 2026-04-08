@@ -1,12 +1,16 @@
+import os
 import re
+import shutil
 import subprocess
+import tempfile
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from src.core.config import OutputFormat, PicSeqConfig, TaskType
+from src.core.config import CombatAudioConfig, OutputFormat, PicSeqConfig, TaskType
 from src.core.encoder_registry import EncoderRegistry
-from src.core.processors import pic_seq
+from src.core.processors import combat_audio, pic_seq
 
 _FRAME_RE = re.compile(r"frame=\s*(\d+)")
 
@@ -65,6 +69,8 @@ class FFmpegWorker(QThread):
         try:
             if self._task_type == TaskType.PIC_SEQ:
                 self._run_pic_seq()
+            elif self._task_type == TaskType.COMBAT_AUDIO:
+                self._run_combat_audio()
             else:
                 self.error.emit(f"Unsupported task type: {self._task_type}")
         except Exception as e:
@@ -135,3 +141,153 @@ class FFmpegWorker(QThread):
     def cancel(self):
         self._cancel_event.set()
         self._terminate_process()
+
+    def _run_combat_audio(self):
+        if self._emit_cancelled_if_needed():
+            return
+        config = CombatAudioConfig.from_dict(self._config)
+        is_audio = combat_audio.is_pure_audio(config.input_path)
+        audio_files = config.audio_order if config.audio_order else [
+            f.filename for f in combat_audio.scan_audio_dir(config.audio_dir)
+        ]
+        total = len(audio_files)
+        if total == 0:
+            self.error.emit("音频目录中没有音频文件")
+            return
+
+        tmp_dir = tempfile.mkdtemp(prefix="jh_combat_")
+        try:
+            self._combat_audio_pipeline(config, is_audio, audio_files, total, tmp_dir)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def _combat_audio_pipeline(self, config, is_audio, audio_files, total, tmp_dir):
+        # Phase 1: Extract base audio (get duration)
+        self.progress.emit(0, total, f"[0/{total}] — 提取音频")
+        if self._emit_cancelled_if_needed():
+            return
+
+        if is_audio:
+            base_audio = config.input_path
+        else:
+            base_audio = os.path.join(tmp_dir, "extracted.aac")
+            cmd = combat_audio.build_extract_command(
+                config.input_path, config.audio_stream_index, base_audio,
+            )
+            if not self._exec_ffmpeg(cmd):
+                if self._cancel_event.is_set():
+                    self.error.emit("已取消")
+                    return
+                self.error.emit("音频提取失败")
+                return
+
+        base_duration = combat_audio.probe_duration(
+            base_audio if is_audio else config.input_path
+        )
+        if base_duration <= 0:
+            self.error.emit("无法获取输入时长")
+            return
+
+        if self._emit_cancelled_if_needed():
+            return
+
+        # Phase 2: Adjust duration (parallel)
+        adjusted_dir = os.path.join(tmp_dir, "adjusted")
+        os.makedirs(adjusted_dir)
+        adjusted_paths = self._parallel_phase(
+            config, audio_files, audio_files, total, base_duration, adjusted_dir, "调整时长",
+            self._adjust_one,
+        )
+        if adjusted_paths is None:
+            return
+
+        # Phase 3: Mix (parallel, only if mix_enabled)
+        if config.mix_enabled:
+            mixed_dir = os.path.join(tmp_dir, "mixed")
+            os.makedirs(mixed_dir)
+            items_with_adjusted = list(zip(audio_files, adjusted_paths))
+            final_paths = self._parallel_phase(
+                config, items_with_adjusted, audio_files, total,
+                base_audio, mixed_dir, "混音",
+                lambda cfg, item, idx, base, out_dir: self._mix_one(cfg, item, idx, base, out_dir),
+            )
+            if final_paths is None:
+                return
+        else:
+            final_paths = adjusted_paths
+
+        if self._emit_cancelled_if_needed():
+            return
+
+        # Phase 4: Mux to MKV (optional)
+        output_paths = combat_audio.resolve_output_path(config, audio_count=total)
+        if config.boxed and not is_audio:
+            self.progress.emit(total, total, f"[{total}/{total}] — 封装MKV")
+            cmd = combat_audio.build_mux_command(
+                config.input_path, final_paths, output_paths[0],
+            )
+            if not self._exec_ffmpeg(cmd):
+                if self._cancel_event.is_set():
+                    self.error.emit("已取消")
+                    return
+                self.error.emit("MKV 封装失败")
+                return
+            self.finished.emit(output_paths[0])
+        else:
+            # Copy final audio files to output locations
+            out_dir = config.output_dir or os.path.dirname(config.input_path)
+            os.makedirs(out_dir, exist_ok=True)
+            for i, src in enumerate(final_paths):
+                if i < len(output_paths):
+                    shutil.copy2(src, output_paths[i])
+            self.finished.emit(out_dir)
+
+    def _parallel_phase(self, config, items, display_names, total, extra_arg, out_dir, phase_name, func):
+        """Run a phase in parallel using ThreadPoolExecutor.
+        items: actual work items (str or tuple)
+        display_names: list of filenames for progress display (same length as items)
+        Returns list of output paths or None on cancel."""
+        results = [None] * len(items)
+        completed = 0
+
+        def do_one(idx, item):
+            return idx, func(config, item, idx, extra_arg, out_dir)
+
+        with ThreadPoolExecutor(max_workers=config.thread_count) as pool:
+            futures = {pool.submit(do_one, i, item): i for i, item in enumerate(items)}
+            for future in as_completed(futures):
+                if self._cancel_event.is_set():
+                    pool.shutdown(wait=False, cancel_futures=True)
+                    self.error.emit("已取消")
+                    return None
+                idx, path = future.result()
+                results[idx] = path
+                completed += 1
+                self.progress.emit(
+                    completed, total,
+                    f"[{completed}/{total}] {display_names[idx]} — {phase_name}",
+                )
+        return results
+
+    def _adjust_one(self, config, filename, idx, base_duration, out_dir):
+        """Adjust one background audio to match base duration."""
+        audio_path = os.path.join(config.audio_dir, filename)
+        bg_duration = combat_audio.probe_duration(audio_path)
+        output_path = os.path.join(out_dir, f"adjusted_{idx:02d}.aac")
+        cmd = combat_audio.build_duration_adjust_command(
+            audio_path, base_duration, bg_duration, output_path,
+        )
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc.wait()
+        return output_path
+
+    def _mix_one(self, config, item, idx, base_audio, out_dir):
+        """Mix one adjusted audio with base audio."""
+        filename, adjusted_path = item
+        output_path = os.path.join(out_dir, f"mixed_{idx:02d}.aac")
+        cmd = combat_audio.build_mix_command(
+            base_audio, adjusted_path, config.volume, output_path,
+        )
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc.wait()
+        return output_path
