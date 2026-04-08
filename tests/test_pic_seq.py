@@ -3,7 +3,8 @@ import tempfile
 
 from PIL import Image
 
-from src.core.processors.pic_seq import detect_alpha, detect_resolution, detect_scan_format
+from src.core.config import BackgroundMode, OutputFormat, PicSeqConfig
+from src.core.processors.pic_seq import build_command, detect_alpha, detect_resolution, detect_scan_format, validate
 
 
 def _create_image_seq(tmp_dir: str, count: int, digits: int = 6, ext: str = "png", mode: str = "RGB"):
@@ -68,3 +69,93 @@ class TestDetectAlpha:
         with tempfile.TemporaryDirectory() as d:
             _create_image_seq(d, 1, digits=6, ext="png", mode="RGB")
             assert detect_alpha(d, "%06d.png") is False
+
+
+class TestValidate:
+    def test_valid_dir(self):
+        with tempfile.TemporaryDirectory() as d:
+            _create_image_seq(d, 10, digits=6, ext="png")
+            cfg = PicSeqConfig(input_dir=d, scan_format="%06d.png")
+            ok, count, err = validate(cfg)
+            assert ok is True
+            assert count == 10
+            assert err is None
+
+    def test_missing_dir(self):
+        cfg = PicSeqConfig(input_dir="/nonexistent/path", scan_format="%06d.png")
+        ok, count, err = validate(cfg)
+        assert ok is False
+        assert "不存在" in err or "not exist" in err.lower()
+
+    def test_no_matching_files(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg = PicSeqConfig(input_dir=d, scan_format="%06d.png")
+            ok, count, err = validate(cfg)
+            assert ok is False
+            assert count == 0
+
+
+class TestBuildCommand:
+    def test_mov_prores(self):
+        cfg = PicSeqConfig(
+            input_dir="/tmp/seq", fps=120, width=3840, height=2160,
+            scan_format="%06d.png", output_format=OutputFormat.MOV_PRORES,
+        )
+        cmd = build_command(cfg, encoder="prores_ks", has_alpha=True)
+        assert cmd[0] == "ffmpeg"
+        assert "-r" in cmd
+        assert "120" in cmd
+        assert "prores_ks" in cmd
+        assert "yuva444p" in cmd
+        assert cmd[-1].endswith(".mov")
+
+    def test_mp4_hevc_with_green_bg(self):
+        cfg = PicSeqConfig(
+            input_dir="/tmp/seq", fps=60, bitrate_mbps=16, width=1920, height=1080,
+            scan_format="%06d.png", output_format=OutputFormat.MP4_HEVC,
+            background_mode=BackgroundMode.GREEN,
+        )
+        cmd = build_command(cfg, encoder="hevc_videotoolbox", has_alpha=True)
+        assert "hevc_videotoolbox" in cmd
+        assert "16M" in cmd
+        assert cmd[-1].endswith(".mp4")
+        vf_idx = cmd.index("-vf")
+        assert "0x00FF00" in cmd[vf_idx + 1]
+
+    def test_mp4_h264_no_alpha_no_overlay(self):
+        cfg = PicSeqConfig(
+            input_dir="/tmp/seq", fps=30, bitrate_mbps=8, width=1920, height=1080,
+            scan_format="%06d.png", output_format=OutputFormat.MP4_H264,
+            background_mode=BackgroundMode.GREEN,
+        )
+        cmd = build_command(cfg, encoder="libx264", has_alpha=False)
+        assert "libx264" in cmd
+        assert "-vf" not in cmd
+        assert cmd[-1].endswith(".mp4")
+
+    def test_output_naming(self):
+        cfg = PicSeqConfig(
+            input_dir="/path/to/scene01", scan_format="%06d.png",
+            output_format=OutputFormat.MOV_PRORES, width=3840, height=2160,
+        )
+        cmd = build_command(cfg, encoder="prores_ks", has_alpha=True)
+        assert cmd[-1] == "/path/to/sscene01.mov"
+
+    def test_custom_output_dir(self):
+        cfg = PicSeqConfig(
+            input_dir="/path/to/scene01", output_dir="/output",
+            scan_format="%06d.png", output_format=OutputFormat.MOV_PRORES,
+            width=3840, height=2160,
+        )
+        cmd = build_command(cfg, encoder="prores_ks", has_alpha=True)
+        assert cmd[-1] == "/output/sscene01.mov"
+
+    def test_mp4_blue_bg(self):
+        cfg = PicSeqConfig(
+            input_dir="/tmp/seq", fps=60, width=1920, height=1080,
+            scan_format="%06d.png", output_format=OutputFormat.MP4_HEVC,
+            background_mode=BackgroundMode.BLUE, bitrate_mbps=16,
+        )
+        cmd = build_command(cfg, encoder="hevc_videotoolbox", has_alpha=True)
+        vf_idx = cmd.index("-vf")
+        assert "0x0000FF" in cmd[vf_idx + 1]
