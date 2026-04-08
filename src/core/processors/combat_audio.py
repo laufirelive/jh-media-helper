@@ -104,3 +104,100 @@ def probe_audio_streams(file_path: str) -> list[AudioStreamInfo]:
         return streams
     except Exception:
         return []
+
+
+_LOUDNORM = "loudnorm=I=-14:TP=-1.0:LRA=15"
+
+
+def build_extract_command(input_path: str, stream_index: int, output_path: str) -> list[str]:
+    """Build ffmpeg command to extract audio stream."""
+    return [
+        "ffmpeg",
+        "-y",
+        "-i", input_path,
+        "-map", f"0:a:{stream_index}",
+        "-c:a", "copy",
+        output_path,
+    ]
+
+
+def build_duration_adjust_command(
+    audio_path: str, target_duration: float, bg_duration: float, output_path: str
+) -> list[str]:
+    """Build ffmpeg command to adjust audio duration (trim or loop)."""
+    if bg_duration >= target_duration:
+        filter_complex = f"atrim=0:{target_duration}"
+    else:
+        filter_complex = f"aloop=-1:1,atrim=0:{target_duration}"
+
+    return [
+        "ffmpeg",
+        "-y",
+        "-i", audio_path,
+        "-af", filter_complex,
+        "-c:a", "aac",
+        output_path,
+    ]
+
+
+def build_mix_command(
+    base_audio: str, bg_audio: str, volume: float, output_path: str
+) -> list[str]:
+    """Build ffmpeg command to mix base and background audio with loudnorm."""
+    filter_complex = (
+        f"[0:a]{_LOUDNORM}[main];"
+        f"[1:a]{_LOUDNORM}[bg];"
+        f"[main][bg]amix=inputs=2:weights={volume} 1,volume=2,{_LOUDNORM}"
+    )
+
+    return [
+        "ffmpeg",
+        "-y",
+        "-i", base_audio,
+        "-i", bg_audio,
+        "-filter_complex", filter_complex,
+        "-c:a", "aac",
+        "-b:a", "192k",
+        output_path,
+    ]
+
+
+def build_mux_command(
+    video_path: str, mixed_audios: list[str], output_path: str
+) -> list[str]:
+    """Build ffmpeg command to mux video with multiple audio tracks."""
+    cmd = ["ffmpeg", "-y", "-i", video_path]
+
+    for audio in mixed_audios:
+        cmd += ["-i", audio]
+
+    cmd += ["-map", "0:v", "-map", "0:s?"]
+
+    for i in range(len(mixed_audios)):
+        cmd += ["-map", f"{i+1}:a"]
+
+    cmd += ["-map", "0:a", "-c", "copy", output_path]
+
+    return cmd
+
+
+def build_preview_command(
+    base_audio: str, bg_audio: str, volume: float, output_path: str
+) -> list[str]:
+    """Build ffmpeg command to create 5-second preview mix."""
+    filter_complex = (
+        f"[0:a]atrim=0:5,{_LOUDNORM}[main];"
+        f"[1:a]atrim=0:5,{_LOUDNORM}[bg];"
+        f"[main][bg]amix=inputs=2:weights={volume} 1,volume=2,{_LOUDNORM}"
+    )
+
+    return [
+        "ffmpeg",
+        "-y",
+        "-i", base_audio,
+        "-i", bg_audio,
+        "-filter_complex", filter_complex,
+        "-c:a", "aac",
+        "-b:a", "192k",
+        output_path,
+    ]

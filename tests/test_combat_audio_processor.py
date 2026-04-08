@@ -7,6 +7,11 @@ from src.core.processors.combat_audio import (
     PURE_AUDIO_EXTENSIONS,
     AudioFileInfo,
     AudioStreamInfo,
+    build_duration_adjust_command,
+    build_extract_command,
+    build_mix_command,
+    build_mux_command,
+    build_preview_command,
     is_pure_audio,
     probe_audio_streams,
     probe_duration,
@@ -170,3 +175,84 @@ class TestProbeAudioStreams:
         mock_run.return_value.returncode = 0
         streams = probe_audio_streams("/path/to/video.mkv")
         assert streams == []
+
+
+class TestBuildExtractCommand:
+    def test_command_structure(self):
+        cmd = build_extract_command("/input/video.mkv", 1, "/output/audio.aac")
+        assert cmd[0] == "ffmpeg"
+        assert "-y" in cmd
+        assert "-i" in cmd
+        assert "/input/video.mkv" in cmd
+        assert "-map" in cmd
+        assert "0:a:1" in cmd
+        assert "-c:a" in cmd
+        assert "copy" in cmd
+        assert cmd[-1] == "/output/audio.aac"
+
+
+class TestBuildDurationAdjustCommand:
+    def test_trim_when_bg_longer_than_target(self):
+        cmd = build_duration_adjust_command("/audio/bg.aac", 100.0, 150.0, "/output/adjusted.aac")
+        filter_str = " ".join(cmd)
+        assert "atrim=0:100.0" in filter_str
+        assert "aloop" not in filter_str
+        assert "-c:a" in cmd
+        assert "aac" in cmd
+
+    def test_loop_when_bg_shorter_than_target(self):
+        cmd = build_duration_adjust_command("/audio/bg.aac", 100.0, 50.0, "/output/adjusted.aac")
+        filter_str = " ".join(cmd)
+        assert "aloop=-1:1" in filter_str
+        assert "atrim=0:100.0" in filter_str
+        assert "-c:a" in cmd
+        assert "aac" in cmd
+
+
+class TestBuildMixCommand:
+    def test_contains_loudnorm(self):
+        cmd = build_mix_command("/audio/base.aac", "/audio/bg.aac", 0.6, "/output/mixed.aac")
+        filter_str = " ".join(cmd)
+        assert "loudnorm" in filter_str
+        assert filter_str.count("loudnorm") == 3
+
+    def test_contains_amix_with_weights(self):
+        cmd = build_mix_command("/audio/base.aac", "/audio/bg.aac", 0.6, "/output/mixed.aac")
+        filter_str = " ".join(cmd)
+        assert "amix" in filter_str
+        assert "weights=0.6 1" in filter_str or "weights=0.6" in filter_str
+
+    def test_output_codec(self):
+        cmd = build_mix_command("/audio/base.aac", "/audio/bg.aac", 0.6, "/output/mixed.aac")
+        assert "-c:a" in cmd
+        assert "aac" in cmd
+        assert "-b:a" in cmd
+        assert "192k" in cmd
+
+
+class TestBuildMuxCommand:
+    def test_three_input_flags(self):
+        cmd = build_mux_command("/video/input.mkv", ["/audio/m1.aac", "/audio/m2.aac"], "/output/final.mkv")
+        assert cmd.count("-i") == 3
+
+    def test_correct_map_order(self):
+        cmd = build_mux_command("/video/input.mkv", ["/audio/m1.aac", "/audio/m2.aac"], "/output/final.mkv")
+        map_indices = [i for i, x in enumerate(cmd) if x == "-map"]
+        assert len(map_indices) >= 4
+        assert cmd[map_indices[0] + 1] == "0:v"
+        assert cmd[map_indices[1] + 1] in ["0:s?", "0:s"]
+        assert cmd[map_indices[2] + 1] == "1:a"
+        assert cmd[map_indices[3] + 1] == "2:a"
+
+    def test_copy_codec(self):
+        cmd = build_mux_command("/video/input.mkv", ["/audio/m1.aac"], "/output/final.mkv")
+        assert "-c" in cmd
+        assert "copy" in cmd
+
+
+class TestBuildPreviewCommand:
+    def test_contains_atrim_5s(self):
+        cmd = build_preview_command("/audio/base.aac", "/audio/bg.aac", 0.6, "/output/preview.aac")
+        filter_str = " ".join(cmd)
+        assert "atrim=0:5" in filter_str
+        assert filter_str.count("atrim=0:5") == 2
