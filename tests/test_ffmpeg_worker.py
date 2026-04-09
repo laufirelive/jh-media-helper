@@ -1,4 +1,7 @@
-from src.worker.ffmpeg_worker import parse_progress
+import subprocess
+
+from src.core.config import TaskType
+from src.worker.ffmpeg_worker import FFmpegWorker, parse_progress
 
 
 class TestParseProgress:
@@ -16,3 +19,45 @@ class TestParseProgress:
 
     def test_empty_line(self):
         assert parse_progress("") is None
+
+
+class _FakeProcess:
+    def __init__(self, raise_timeout: bool):
+        self.raise_timeout = raise_timeout
+        self.terminated = 0
+        self.killed = 0
+        self._polled = None
+
+    def poll(self):
+        return self._polled
+
+    def terminate(self):
+        self.terminated += 1
+
+    def wait(self, timeout=None):
+        if self.raise_timeout and timeout is not None and self.killed == 0:
+            raise subprocess.TimeoutExpired(cmd="ffmpeg", timeout=timeout)
+        self._polled = 0
+        return 0
+
+    def kill(self):
+        self.killed += 1
+        self._polled = -9
+
+
+class TestWorkerCancel:
+    def test_cancel_terminates_process(self):
+        worker = FFmpegWorker(TaskType.PIC_SEQ, {}, encoder_registry=None)
+        fake = _FakeProcess(raise_timeout=False)
+        worker._process = fake
+        worker.cancel()
+        assert fake.terminated == 1
+        assert fake.killed == 0
+
+    def test_cancel_kills_process_when_terminate_timeout(self):
+        worker = FFmpegWorker(TaskType.PIC_SEQ, {}, encoder_registry=None)
+        fake = _FakeProcess(raise_timeout=True)
+        worker._process = fake
+        worker.cancel()
+        assert fake.terminated == 1
+        assert fake.killed == 1

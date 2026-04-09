@@ -69,3 +69,47 @@ class PicSeqConfig:
             background_mode=BackgroundMode(d.get("background_mode", "transparent")),
             hw_accel=d.get("hw_accel", True),
         )
+
+
+@dataclass
+class CombatAudioConfig:
+    input_path: str
+    audio_dir: str
+    output_dir: str | None = None
+    mix_enabled: bool = True
+    volume: float = 0.6
+    boxed: bool = False
+    thread_count: int = 1
+    audio_stream_index: int = 0
+    audio_order: list[str] | None = None
+
+    def __post_init__(self):
+        if self.audio_order is None:
+            self.audio_order = []
+
+    def to_dict(self) -> dict:
+        return {
+            "input_path": self.input_path,
+            "audio_dir": self.audio_dir,
+            "output_dir": self.output_dir,
+            "mix_enabled": self.mix_enabled,
+            "volume": self.volume,
+            "boxed": self.boxed,
+            "thread_count": self.thread_count,
+            "audio_stream_index": self.audio_stream_index,
+            "audio_order": self.audio_order,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "CombatAudioConfig":
+        return cls(
+            input_path=d["input_path"],
+            audio_dir=d["audio_dir"],
+            output_dir=d.get("output_dir"),
+            mix_enabled=d.get("mix_enabled", True),
+            volume=d.get("volume", 0.6),
+            boxed=d.get("boxed", False),
+            thread_count=d.get("thread_count", 1),
+            audio_stream_index=d.get("audio_stream_index", 0),
+            audio_order=d.get("audio_order", []),
+        )

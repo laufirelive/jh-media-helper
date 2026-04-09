@@ -46,6 +46,28 @@ class TestQueueManager:
             mgr.move_task(t3.id, 0)
             assert mgr.tasks[0].id == t3.id
 
+    def test_reorder_tasks(self):
+        with tempfile.TemporaryDirectory() as d:
+            mgr = QueueManager(os.path.join(d, "queue.json"))
+            t1 = _make_task("/tmp/a")
+            t2 = _make_task("/tmp/b")
+            t3 = _make_task("/tmp/c")
+            mgr.add_task(t1)
+            mgr.add_task(t2)
+            mgr.add_task(t3)
+            assert mgr.reorder_tasks([t3.id, t1.id, t2.id])
+            assert [t.id for t in mgr.tasks] == [t3.id, t1.id, t2.id]
+
+    def test_reorder_tasks_rejects_mismatch(self):
+        with tempfile.TemporaryDirectory() as d:
+            mgr = QueueManager(os.path.join(d, "queue.json"))
+            t1 = _make_task("/tmp/a")
+            t2 = _make_task("/tmp/b")
+            mgr.add_task(t1)
+            mgr.add_task(t2)
+            assert not mgr.reorder_tasks([t1.id])
+            assert [t.id for t in mgr.tasks] == [t1.id, t2.id]
+
     def test_next_pending(self):
         with tempfile.TemporaryDirectory() as d:
             mgr = QueueManager(os.path.join(d, "queue.json"))

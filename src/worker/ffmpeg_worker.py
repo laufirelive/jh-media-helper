@@ -1,12 +1,17 @@
+import os
 import re
+import shutil
 import subprocess
+import tempfile
 import threading
+from dataclasses import replace
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from src.core.config import OutputFormat, PicSeqConfig, TaskType
+from src.core.config import CombatAudioConfig, OutputFormat, PicSeqConfig, TaskType
 from src.core.encoder_registry import EncoderRegistry
-from src.core.processors import pic_seq
+from src.core.processors import combat_audio, pic_seq
 
 _FRAME_RE = re.compile(r"frame=\s*(\d+)")
 
@@ -41,18 +46,47 @@ class FFmpegWorker(QThread):
         self._cancel_event = threading.Event()
         self._process: subprocess.Popen | None = None
 
+    def _emit_cancelled_if_needed(self) -> bool:
+        """若已请求取消则发出 error 并返回 True（用于 Popen 前等阶段及时退出）。"""
+        if self._cancel_event.is_set():
+            self.error.emit("已取消")
+            return True
+        return False
+
+    def _terminate_process(self) -> None:
+        """优先温和终止，超时后强制 kill，确保取消操作可见生效。"""
+        if self._process is None:
+            return
+        if self._process.poll() is not None:
+            return
+        self._process.terminate()
+        try:
+            self._process.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            self._process.kill()
+            self._process.wait(timeout=1.0)
+
     def run(self):
         try:
             if self._task_type == TaskType.PIC_SEQ:
                 self._run_pic_seq()
+            elif self._task_type == TaskType.COMBAT_AUDIO:
+                self._run_combat_audio()
             else:
                 self.error.emit(f"Unsupported task type: {self._task_type}")
         except Exception as e:
             self.error.emit(str(e))
 
     def _run_pic_seq(self):
+        # 在尚未启动 ffmpeg 前也可取消；否则用户点「取消」无任何信号，界面不会恢复
+        if self._emit_cancelled_if_needed():
+            return
         config = PicSeqConfig.from_dict(self._config)
+        if self._emit_cancelled_if_needed():
+            return
         has_alpha = pic_seq.detect_alpha(config.input_dir, config.scan_format)
+        if self._emit_cancelled_if_needed():
+            return
 
         if config.output_format == OutputFormat.MOV_PRORES:
             encoder = "prores_ks"
@@ -62,18 +96,21 @@ class FFmpegWorker(QThread):
             encoder = self._encoder_registry.get_fallback()
 
         cmd = pic_seq.build_command(config, encoder=encoder, has_alpha=has_alpha)
+        if self._emit_cancelled_if_needed():
+            return
         success = self._exec_ffmpeg(cmd)
+        if self._emit_cancelled_if_needed():
+            return
 
         if not success and encoder != self._encoder_registry.get_fallback() and config.output_format != OutputFormat.MOV_PRORES:
-            if self._cancel_event.is_set():
-                return
             fallback = self._encoder_registry.get_fallback()
             self.progress.emit(0, self._total_frames, f"回退到 {fallback}")
             cmd = pic_seq.build_command(config, encoder=fallback, has_alpha=has_alpha)
             success = self._exec_ffmpeg(cmd)
+            if self._emit_cancelled_if_needed():
+                return
 
-        if self._cancel_event.is_set():
-            self.error.emit("已取消")
+        if self._emit_cancelled_if_needed():
             return
 
         if success:
@@ -83,6 +120,9 @@ class FFmpegWorker(QThread):
             self.error.emit("FFmpeg 编码失败")
 
     def _exec_ffmpeg(self, cmd: list[str]) -> bool:
+        # 启动子进程前再检查，避免已取消仍去 Popen
+        if self._cancel_event.is_set():
+            return False
         self._process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -90,8 +130,7 @@ class FFmpegWorker(QThread):
         )
         for raw_line in self._process.stderr:
             if self._cancel_event.is_set():
-                self._process.terminate()
-                self._process.wait()
+                self._terminate_process()
                 return False
             line = raw_line.decode("utf-8", errors="replace").strip()
             frame = parse_progress(line)
@@ -102,5 +141,194 @@ class FFmpegWorker(QThread):
 
     def cancel(self):
         self._cancel_event.set()
-        if self._process:
-            self._process.terminate()
+        self._terminate_process()
+
+    def _run_combat_audio(self):
+        if self._emit_cancelled_if_needed():
+            return
+        config = CombatAudioConfig.from_dict(self._config)
+        is_audio = combat_audio.is_pure_audio(config.input_path)
+        audio_files = config.audio_order if config.audio_order else [
+            f.filename for f in combat_audio.scan_audio_dir(config.audio_dir)
+        ]
+        total = len(audio_files)
+        if total == 0:
+            self.error.emit("音频目录中没有音频文件")
+            return
+
+        tmp_dir = tempfile.mkdtemp(prefix="jh_combat_")
+        try:
+            self._combat_audio_pipeline(config, is_audio, audio_files, total, tmp_dir)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def _combat_audio_pipeline(self, config, is_audio, audio_files, total, tmp_dir):
+        # 检测输入是否含音轨；纯音频输入视为有「原音」可参与混音
+        streams = [] if is_audio else combat_audio.probe_audio_streams(config.input_path)
+        has_audio_streams = is_audio or bool(streams)
+        # 无音轨视频无法与原片混音，等价于关闭混音（避免 base_audio 为空仍走混音阶段）
+        mix_effective = config.mix_enabled and has_audio_streams
+        # 无视频原音时背景音乐只裁到不超过片长，不循环拉长
+        loop_short_bgm = has_audio_streams
+
+        # Phase 1: Extract base audio (only when mixing is needed)
+        self.progress.emit(0, total, f"[0/{total}] — 提取音频")
+        if self._emit_cancelled_if_needed():
+            return
+
+        base_audio = None
+        if mix_effective:
+            if is_audio:
+                base_audio = config.input_path
+            elif has_audio_streams:
+                base_audio = os.path.join(tmp_dir, "extracted.aac")
+                cmd = combat_audio.build_extract_command(
+                    config.input_path, config.audio_stream_index, base_audio,
+                )
+                if not self._exec_ffmpeg(cmd):
+                    if self._cancel_event.is_set():
+                        self.error.emit("已取消")
+                        return
+                    self.error.emit("音频提取失败")
+                    return
+
+        # Duration always from container
+        base_duration = combat_audio.probe_duration(config.input_path)
+        if base_duration <= 0:
+            self.error.emit("无法获取输入时长")
+            return
+
+        if self._emit_cancelled_if_needed():
+            return
+
+        # Phase 2: Adjust duration (parallel)
+        adjusted_dir = os.path.join(tmp_dir, "adjusted")
+        os.makedirs(adjusted_dir)
+        adjusted_paths = self._parallel_phase(
+            config,
+            audio_files,
+            audio_files,
+            total,
+            (base_duration, loop_short_bgm),
+            adjusted_dir,
+            "调整时长",
+            self._adjust_one,
+        )
+        if adjusted_paths is None:
+            return
+
+        # Phase 3: Mix (parallel, only if mix_effective)
+        if mix_effective:
+            mixed_dir = os.path.join(tmp_dir, "mixed")
+            os.makedirs(mixed_dir)
+            items_with_adjusted = [
+                (name, adj) for name, adj in zip(audio_files, adjusted_paths)
+                if adj is not None
+            ]
+            display_for_mix = [name for name, _ in items_with_adjusted]
+            final_paths = self._parallel_phase(
+                config, items_with_adjusted, display_for_mix, len(items_with_adjusted),
+                base_audio, mixed_dir, "混音",
+                lambda cfg, item, idx, base, out_dir: self._mix_one(cfg, item, idx, base, out_dir),
+            )
+            if final_paths is None:
+                return
+        else:
+            final_paths = [p for p in adjusted_paths if p is not None]
+
+        # Filter out None results from failed items
+        final_paths = [p for p in final_paths if p is not None]
+
+        if self._emit_cancelled_if_needed():
+            return
+
+        # Phase 4: Mux to MKV (optional)；输出文件名后缀与是否实际混音一致
+        output_paths = combat_audio.resolve_output_path(
+            replace(config, mix_enabled=mix_effective), audio_count=len(final_paths)
+        )
+        if config.boxed and not is_audio:
+            out_dir = os.path.dirname(output_paths[0])
+            os.makedirs(out_dir, exist_ok=True)
+            self.progress.emit(total, total, f"[{total}/{total}] — 封装MKV")
+            cmd = combat_audio.build_mux_command(
+                config.input_path, final_paths, output_paths[0],
+                keep_original_audio=has_audio_streams,
+            )
+            if not self._exec_ffmpeg(cmd):
+                if self._cancel_event.is_set():
+                    self.error.emit("已取消")
+                    return
+                self.error.emit("MKV 封装失败")
+                return
+            self.finished.emit(output_paths[0])
+        else:
+            # Copy final audio files to output locations
+            out_dir = config.output_dir or os.path.dirname(config.input_path)
+            os.makedirs(out_dir, exist_ok=True)
+            for i, src in enumerate(final_paths):
+                if i < len(output_paths):
+                    shutil.copy2(src, output_paths[i])
+            self.finished.emit(out_dir)
+
+    def _parallel_phase(self, config, items, display_names, total, extra_arg, out_dir, phase_name, func):
+        """Run a phase in parallel using ThreadPoolExecutor.
+        items: actual work items (str or tuple)
+        display_names: list of filenames for progress display (same length as items)
+        Returns list of output paths or None on cancel."""
+        results = [None] * len(items)
+        completed = 0
+
+        def do_one(idx, item):
+            return idx, func(config, item, idx, extra_arg, out_dir)
+
+        with ThreadPoolExecutor(max_workers=config.thread_count) as pool:
+            futures = {pool.submit(do_one, i, item): i for i, item in enumerate(items)}
+            for future in as_completed(futures):
+                if self._cancel_event.is_set():
+                    pool.shutdown(wait=False, cancel_futures=True)
+                    self.error.emit("已取消")
+                    return None
+                try:
+                    idx, path = future.result()
+                except Exception:
+                    completed += 1
+                    continue
+                results[idx] = path
+                completed += 1
+                self.progress.emit(
+                    completed, total,
+                    f"[{completed}/{total}] {display_names[idx]} — {phase_name}",
+                )
+        return results
+
+    def _adjust_one(self, config, filename, idx, duration_and_loop, out_dir):
+        """将单条背景音乐对齐基准时长（可禁止循环以适配无原音视频）。"""
+        base_duration, loop_short_audio = duration_and_loop
+        audio_path = os.path.join(config.audio_dir, filename)
+        bg_duration = combat_audio.probe_duration(audio_path)
+        output_path = os.path.join(out_dir, f"adjusted_{idx:02d}.aac")
+        cmd = combat_audio.build_duration_adjust_command(
+            audio_path,
+            base_duration,
+            bg_duration,
+            output_path,
+            loop_short_audio=loop_short_audio,
+        )
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc.wait()
+        if proc.returncode != 0:
+            raise RuntimeError(f"时长调整失败: {filename}")
+        return output_path
+
+    def _mix_one(self, config, item, idx, base_audio, out_dir):
+        """Mix one adjusted audio with base audio."""
+        filename, adjusted_path = item
+        output_path = os.path.join(out_dir, f"mixed_{idx:02d}.aac")
+        cmd = combat_audio.build_mix_command(
+            base_audio, adjusted_path, config.volume, output_path,
+        )
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc.wait()
+        if proc.returncode != 0:
+            raise RuntimeError(f"混音失败: {filename}")
+        return output_path
