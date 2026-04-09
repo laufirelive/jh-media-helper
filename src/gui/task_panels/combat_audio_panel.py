@@ -33,6 +33,7 @@ from src.core.preview_cache import (
 from src.core.processors import combat_audio
 from src.gui.components.audio_player import AudioPlayerBar
 from src.gui.components.file_selector import FileSelector
+from src.gui.components.preview_start_cell import PreviewStartCell
 from src.gui.task_panels.base_panel import BaseTaskPanel
 
 _MEDIA_FILTER = "媒体文件 (*.mp4 *.mkv *.mov *.avi *.aac *.mp3 *.wav *.flac);;所有文件 (*)"
@@ -50,6 +51,7 @@ class CombatAudioPanel(BaseTaskPanel):
         self._bg_files: list[combat_audio.AudioFileInfo] = []
         self._is_pure_audio = False
         self._input_duration = 0.0
+        self._preview_start_ms = 0
         self._preview_temp_dir: str | None = None
         self._preview_cache = preview_cache
         super().__init__(parent, init_layout=False)
@@ -83,7 +85,7 @@ class CombatAudioPanel(BaseTaskPanel):
         main.addWidget(self._progress)
 
         # Connect signals for preview button auto-enable
-        self._track_radio_group.buttonClicked.connect(lambda _: self._emit_preview_state())
+        self._track_radio_group.buttonClicked.connect(self._on_selected_track_changed)
         self._bg_table.selectionModel().selectionChanged.connect(lambda *_: self._emit_preview_state())
 
     def resizeEvent(self, event) -> None:
@@ -223,14 +225,15 @@ class CombatAudioPanel(BaseTaskPanel):
         group = QGroupBox("输入音轨")
         group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(group)
-        self._tracks_table = QTableWidget(0, 6)
-        self._tracks_table.setHorizontalHeaderLabels(["", "索引", "编码", "采样率", "声道", ""])
+        self._tracks_table = QTableWidget(0, 7)
+        self._tracks_table.setHorizontalHeaderLabels(["", "索引", "编码", "试听起点", "采样率", "声道", ""])
         self._tracks_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self._tracks_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self._tracks_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self._tracks_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self._tracks_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self._tracks_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self._tracks_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         self._tracks_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        self._tracks_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
         self._tracks_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self._tracks_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._tracks_table.verticalHeader().setVisible(False)
@@ -277,6 +280,7 @@ class CombatAudioPanel(BaseTaskPanel):
     # --- Signal handlers ---
 
     def _on_input_changed(self, path: str):
+        self._preview_start_ms = 0
         if not path or not os.path.exists(path):
             self._input_streams = []
             self._is_pure_audio = False
@@ -328,6 +332,19 @@ class CombatAudioPanel(BaseTaskPanel):
         self._update_param_states()
         self._emit_preview_state()
 
+    def _on_selected_track_changed(self, *_args):
+        self._refresh_preview_start_cells()
+        self._emit_preview_state()
+
+    def _on_preview_start_changed(self, audio_position: int, value_ms: int) -> None:
+        if audio_position != self._track_radio_group.checkedId():
+            return
+        clamped_value = max(0, min(value_ms, self._input_duration_ms()))
+        if self._preview_start_ms == clamped_value:
+            return
+        self._preview_start_ms = clamped_value
+        self._refresh_preview_start_cells()
+
     def _update_param_states(self):
         """Update parameter enable/disable states based on current selections."""
         is_audio = self._is_pure_audio
@@ -364,6 +381,7 @@ class CombatAudioPanel(BaseTaskPanel):
     # --- Table refresh ---
 
     def _refresh_tracks_table(self):
+        selected_audio_position = self._track_radio_group.checkedId()
         self._tracks_table.setRowCount(0)
         self._track_play_buttons.clear()
         # Clear old radio buttons from group
@@ -387,33 +405,61 @@ class CombatAudioPanel(BaseTaskPanel):
             self._tracks_table.setItem(row, 1, QTableWidgetItem(f"#{stream.index}"))
             self._tracks_table.setItem(row, 2, QTableWidgetItem(stream.codec.upper()))
 
+            preview_cell = PreviewStartCell(self._tracks_table)
+            preview_cell.set_duration_ms(self._input_duration_ms())
+            preview_cell.set_value_ms(self._preview_start_ms)
+            preview_cell._slider.valueChanged.connect(
+                lambda value, audio_position=stream.audio_position: self._on_preview_start_changed(audio_position, value)
+            )
+            self._tracks_table.setCellWidget(row, 3, preview_cell)
+
             sr = f"{stream.sample_rate // 1000}kHz" if stream.sample_rate else "?"
-            self._tracks_table.setItem(row, 3, QTableWidgetItem(sr))
+            self._tracks_table.setItem(row, 4, QTableWidgetItem(sr))
 
             ch = self._channel_label(stream)
-            self._tracks_table.setItem(row, 4, QTableWidgetItem(ch))
+            self._tracks_table.setItem(row, 5, QTableWidgetItem(ch))
 
             # Play button column
             btn = QPushButton("\u25B6")
             btn.setFixedWidth(32)
             if self._is_pure_audio:
                 btn.clicked.connect(
-                    lambda checked, p=self._input_selector.path(), n=stream.codec:
-                        self._player.play_file(p, f"输入 {n}")
+                    lambda checked, p=self._input_selector.path(), si=stream.index, n=stream.codec:
+                        self._play_input_track_preview(p, si, f"输入 {n}")
                 )
             else:
                 btn.clicked.connect(
                     lambda checked, p=self._input_selector.path(), si=stream.audio_position, n=f"输入 #{stream.index} {stream.codec}":
-                        self._play_input_stream_preview(p, si, n)
+                        self._play_input_track_preview(p, si, n)
                 )
-            self._tracks_table.setCellWidget(row, 5, btn)
+            self._tracks_table.setCellWidget(row, 6, btn)
             self._track_play_buttons.append(btn)
 
-        # Auto-select first track
-        if self._input_streams:
+        restored_radio = None
+        if selected_audio_position >= 0:
+            restored_radio = self._track_radio_group.button(selected_audio_position)
+
+        # Fall back to the first track only when the previous selection no longer exists.
+        if restored_radio:
+            restored_radio.setChecked(True)
+        elif self._input_streams:
             first_radio = self._track_radio_group.button(self._input_streams[0].audio_position)
             if first_radio:
                 first_radio.setChecked(True)
+
+        self._refresh_preview_start_cells()
+
+    def _refresh_preview_start_cells(self) -> None:
+        selected_audio_position = self._track_radio_group.checkedId()
+        duration_ms = self._input_duration_ms()
+
+        for row, stream in enumerate(self._input_streams):
+            preview_cell = self._tracks_table.cellWidget(row, 3)
+            if not isinstance(preview_cell, PreviewStartCell):
+                continue
+            preview_cell.set_duration_ms(duration_ms)
+            preview_cell.set_value_ms(self._preview_start_ms)
+            preview_cell.set_active(stream.audio_position == selected_audio_position)
 
     def _refresh_bg_table(self):
         self._bg_table.setRowCount(0)
@@ -479,15 +525,29 @@ class CombatAudioPanel(BaseTaskPanel):
         if bg_row < 0 or bg_row >= len(self._bg_files):
             return
         bg_path = self._bg_files[bg_row].path
+        bg_duration = float(getattr(self._bg_files[bg_row], "duration", 0.0) or 0.0)
         volume = self._volume_spin.value()
         preview_cache = getattr(self, "_preview_cache", None)
+        preview_start_ms = max(0, int(getattr(self, "_preview_start_ms", 0)))
+        preview_start_seconds = preview_start_ms / 1000.0
+        preview_duration_seconds = combat_audio.PREVIEW_DURATION_SECONDS
+        mix_base_start_seconds = 0.0 if not self._is_pure_audio else preview_start_seconds
+        mix_bg_start_seconds = preview_start_seconds
+        if bg_duration > 0:
+            mix_bg_start_seconds = preview_start_seconds % bg_duration
 
         # Clean up previous temp preview outputs before generating a new fallback preview.
         self._cleanup_preview_temp()
         if preview_cache is not None:
             self._preview_temp_dir = None
             preview_path = preview_cache.get_cache_path(
-                build_mix_preview_cache_key(input_path, stream_idx, bg_path, volume)
+                build_mix_preview_cache_key(
+                    input_path,
+                    stream_idx,
+                    bg_path,
+                    volume,
+                    start_ms=preview_start_ms,
+                )
             )
             if CombatAudioPanel._is_usable_preview_file(preview_path):
                 self._player.play_file(preview_path, "试听混合")
@@ -498,10 +558,20 @@ class CombatAudioPanel(BaseTaskPanel):
             base_audio = input_path
             if not self._is_pure_audio:
                 base_audio = preview_cache.get_cache_path(
-                    build_base_audio_cache_key(input_path, stream_idx)
+                    build_base_audio_cache_key(
+                        input_path,
+                        stream_idx,
+                        start_ms=preview_start_ms,
+                    )
                 )
                 if not os.path.exists(base_audio):
-                    cmd = combat_audio.build_extract_command(input_path, stream_idx, base_audio)
+                    cmd = combat_audio.build_extract_command(
+                        input_path,
+                        stream_idx,
+                        base_audio,
+                        start_seconds=preview_start_seconds,
+                        duration_seconds=preview_duration_seconds,
+                    )
                     err = combat_audio.run_ffmpeg_command(
                         cmd, timeout=30, default_message="试听混合失败：提取原始音轨时出错"
                     )
@@ -510,7 +580,13 @@ class CombatAudioPanel(BaseTaskPanel):
                         return
                 elif not CombatAudioPanel._is_usable_preview_file(base_audio):
                     CombatAudioPanel._discard_stale_preview_file(base_audio)
-                    cmd = combat_audio.build_extract_command(input_path, stream_idx, base_audio)
+                    cmd = combat_audio.build_extract_command(
+                        input_path,
+                        stream_idx,
+                        base_audio,
+                        start_seconds=preview_start_seconds,
+                        duration_seconds=preview_duration_seconds,
+                    )
                     err = combat_audio.run_ffmpeg_command(
                         cmd, timeout=30, default_message="试听混合失败：提取原始音轨时出错"
                     )
@@ -523,7 +599,13 @@ class CombatAudioPanel(BaseTaskPanel):
             # If video input, extract selected audio track first.
             if not self._is_pure_audio:
                 base_audio = os.path.join(self._preview_temp_dir, "base.aac")
-                cmd = combat_audio.build_extract_command(input_path, stream_idx, base_audio)
+                cmd = combat_audio.build_extract_command(
+                    input_path,
+                    stream_idx,
+                    base_audio,
+                    start_seconds=preview_start_seconds,
+                    duration_seconds=preview_duration_seconds,
+                )
                 err = combat_audio.run_ffmpeg_command(
                     cmd, timeout=30, default_message="试听混合失败：提取原始音轨时出错"
                 )
@@ -535,7 +617,16 @@ class CombatAudioPanel(BaseTaskPanel):
                 base_audio = input_path
 
             preview_path = os.path.join(self._preview_temp_dir, "preview.aac")
-        cmd = combat_audio.build_preview_command(base_audio, bg_path, volume, preview_path)
+        cmd = combat_audio.build_preview_command(
+            base_audio,
+            bg_path,
+            volume,
+            preview_path,
+            start_seconds=preview_start_seconds,
+            base_start_seconds=mix_base_start_seconds,
+            bg_start_seconds=mix_bg_start_seconds,
+            duration_seconds=preview_duration_seconds,
+        )
         err = combat_audio.run_ffmpeg_command(
             cmd, timeout=30, default_message="试听混合失败：生成预览音频时出错"
         )
@@ -573,8 +664,23 @@ class CombatAudioPanel(BaseTaskPanel):
         except OSError:
             pass
 
+    def _play_input_track_preview(self, file_path: str, stream_index: int, display_name: str) -> None:
+        err = self._player.play_stream(
+            file_path,
+            stream_index,
+            display_name,
+            preview_start_ms=self._preview_start_ms,
+        )
+        if err is not None:
+            QMessageBox.critical(self, "错误", err)
+
     def _play_input_stream_preview(self, file_path: str, stream_index: int, display_name: str) -> None:
-        err = self._player.play_stream(file_path, stream_index, display_name)
+        err = self._player.play_stream(
+            file_path,
+            stream_index,
+            display_name,
+            preview_start_ms=self._preview_start_ms,
+        )
         if err is not None:
             QMessageBox.critical(self, "错误", err)
 
@@ -588,6 +694,9 @@ class CombatAudioPanel(BaseTaskPanel):
         if h > 0:
             return f"{h:02d}:{m:02d}:{s:02d}"
         return f"{m:02d}:{s:02d}"
+
+    def _input_duration_ms(self) -> int:
+        return max(0, int(self._input_duration * 1000))
 
     @staticmethod
     def _channel_label(stream: combat_audio.AudioStreamInfo) -> str:

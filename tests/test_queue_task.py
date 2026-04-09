@@ -33,6 +33,7 @@ def test_round_trip():
     task.status = TaskStatus.COMPLETED
     task.progress = 100
     task.total = 100
+    task.progress_desc = "[2/4] 调整时长"
 
     d = task.to_dict()
     restored = QueueTask.from_dict(d)
@@ -42,6 +43,7 @@ def test_round_trip():
     assert restored.status == TaskStatus.COMPLETED
     assert restored.progress == 100
     assert restored.total == 100
+    assert restored.progress_desc == "[2/4] 调整时长"
     assert restored.config["fps"] == 60
     assert restored.config["output_format"] == "mp4_hevc"
 
@@ -59,4 +61,5 @@ def test_from_dict_handles_missing_optional_fields():
     task = QueueTask.from_dict(d)
     assert task.progress == 0
     assert task.total == 0
+    assert task.progress_desc == ""
     assert task.error is None

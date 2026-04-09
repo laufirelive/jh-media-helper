@@ -98,6 +98,7 @@ class TestQueueManager:
             mgr = QueueManager(path)
             t1 = _make_task("/tmp/a")
             t1.status = TaskStatus.COMPLETED
+            t1.progress_desc = "[1/2] 提取音频"
             t2 = _make_task("/tmp/b")
             mgr.add_task(t1)
             mgr.add_task(t2)
@@ -106,6 +107,7 @@ class TestQueueManager:
             mgr2.load()
             assert len(mgr2.tasks) == 2
             assert mgr2.tasks[0].status == TaskStatus.COMPLETED
+            assert mgr2.tasks[0].progress_desc == "[1/2] 提取音频"
             assert mgr2.tasks[1].status == TaskStatus.PENDING
 
     def test_save_converts_processing_to_pending(self):

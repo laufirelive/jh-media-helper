@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from src.core.config import CombatAudioConfig
 
 PURE_AUDIO_EXTENSIONS = {".aac", ".mp3", ".wav", ".flac"}
+PREVIEW_DURATION_SECONDS = 10.0
 
 
 @dataclass
@@ -137,16 +138,39 @@ def run_ffmpeg_command(cmd: list[str], *, timeout: int, default_message: str) ->
 _LOUDNORM = "loudnorm=I=-14:TP=-1.0:LRA=15"
 
 
-def build_extract_command(input_path: str, stream_index: int, output_path: str) -> list[str]:
+def build_extract_command(
+    input_path: str,
+    stream_index: int,
+    output_path: str,
+    *,
+    start_seconds: float = 0.0,
+    duration_seconds: float | None = None,
+) -> list[str]:
     """Build ffmpeg command to extract audio stream."""
-    return [
+    if start_seconds < 0:
+        raise ValueError("start_seconds must be >= 0")
+    if duration_seconds is not None and duration_seconds <= 0:
+        raise ValueError("duration_seconds must be > 0")
+
+    cmd = [
         "ffmpeg",
         "-y",
         "-i", input_path,
+    ]
+
+    if start_seconds > 0.0:
+        cmd += ["-ss", f"{start_seconds}"]
+
+    if duration_seconds is not None:
+        cmd += ["-t", f"{duration_seconds}"]
+
+    cmd += [
         "-map", f"0:a:{stream_index}",
         "-c:a", "copy",
         output_path,
     ]
+
+    return cmd
 
 
 def build_duration_adjust_command(
@@ -158,22 +182,17 @@ def build_duration_adjust_command(
     loop_short_audio: bool = True,
 ) -> list[str]:
     """构建时长调整命令：长于目标则裁切；短于目标时可循环铺满或仅保留原长（不循环）。"""
-    if bg_duration >= target_duration:
-        filter_complex = f"atrim=0:{target_duration}"
-    elif loop_short_audio:
-        filter_complex = f"aloop=-1:1,atrim=0:{target_duration}"
-    else:
-        # 无原片音轨时只裁剪：不拉长，输出时长不超过背景音乐本身
-        filter_complex = f"atrim=0:{bg_duration}"
-
-    return [
-        "ffmpeg",
-        "-y",
+    output_duration = target_duration if (bg_duration >= target_duration or loop_short_audio) else bg_duration
+    cmd = ["ffmpeg", "-y"]
+    if bg_duration < target_duration and loop_short_audio:
+        cmd += ["-stream_loop", "-1"]
+    cmd += [
         "-i", audio_path,
-        "-af", filter_complex,
+        "-t", f"{output_duration}",
         "-c:a", "aac",
         output_path,
     ]
+    return cmd
 
 
 def build_mix_command(
@@ -223,12 +242,34 @@ def build_mux_command(
 
 
 def build_preview_command(
-    base_audio: str, bg_audio: str, volume: float, output_path: str
+    base_audio: str,
+    bg_audio: str,
+    volume: float,
+    output_path: str,
+    *,
+    start_seconds: float = 0.0,
+    base_start_seconds: float | None = None,
+    bg_start_seconds: float | None = None,
+    duration_seconds: float = PREVIEW_DURATION_SECONDS,
 ) -> list[str]:
-    """Build ffmpeg command to create 5-second preview mix."""
+    """Build ffmpeg command to create a preview mix."""
+    if start_seconds < 0:
+        raise ValueError("start_seconds must be >= 0")
+    if duration_seconds <= 0:
+        raise ValueError("duration_seconds must be > 0")
+
+    resolved_base_start = start_seconds if base_start_seconds is None else base_start_seconds
+    resolved_bg_start = start_seconds if bg_start_seconds is None else bg_start_seconds
+    if resolved_base_start < 0:
+        raise ValueError("base_start_seconds must be >= 0")
+    if resolved_bg_start < 0:
+        raise ValueError("bg_start_seconds must be >= 0")
+
+    base_end_seconds = resolved_base_start + duration_seconds
+    bg_end_seconds = resolved_bg_start + duration_seconds
     filter_complex = (
-        f"[0:a]atrim=0:5,{_LOUDNORM}[main];"
-        f"[1:a]atrim=0:5,{_LOUDNORM}[bg];"
+        f"[0:a]atrim=start={resolved_base_start}:end={base_end_seconds},asetpts=PTS-STARTPTS,{_LOUDNORM}[main];"
+        f"[1:a]atrim=start={resolved_bg_start}:end={bg_end_seconds},asetpts=PTS-STARTPTS,{_LOUDNORM}[bg];"
         f"[main][bg]amix=inputs=2:duration=first:dropout_transition=1:weights={volume} 1:normalize=0,volume=2,{_LOUDNORM}"
     )
 
@@ -237,6 +278,7 @@ def build_preview_command(
         "-y",
         "-hwaccel", "auto",
         "-i", base_audio,
+        "-stream_loop", "-1",
         "-i", bg_audio,
         "-filter_complex", filter_complex,
         "-c:a", "aac",

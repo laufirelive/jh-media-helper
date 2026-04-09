@@ -15,6 +15,7 @@ class QueueTask:
     status: TaskStatus = TaskStatus.PENDING
     progress: int = 0
     total: int = 0
+    progress_desc: str = ""
     error: str | None = None
     created_at: str = ""
 
@@ -30,6 +31,7 @@ class QueueTask:
             status=TaskStatus.PENDING,
             progress=0,
             total=0,
+            progress_desc="",
             error=None,
             created_at=datetime.now().isoformat(),
         )
@@ -44,6 +46,7 @@ class QueueTask:
             "status": self.status.value,
             "progress": self.progress,
             "total": self.total,
+            "progress_desc": self.progress_desc,
             "error": self.error,
             "created_at": self.created_at,
         }
@@ -59,6 +62,7 @@ class QueueTask:
             status=TaskStatus(d["status"]),
             progress=d.get("progress", 0),
             total=d.get("total", 0),
+            progress_desc=d.get("progress_desc", ""),
             error=d.get("error"),
             created_at=d["created_at"],
         )
