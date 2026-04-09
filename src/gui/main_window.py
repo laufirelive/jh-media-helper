@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
 from src.core.config import TaskType
 from src.core.data_dir import get_queue_path
 from src.core.encoder_registry import EncoderRegistry
+from src.core.preview_cache import PreviewCacheSession
 from src.core.processors.pic_seq import _resolve_output_path
 from src.core.queue_manager import QueueManager
 from src.core.queue_task import QueueTask
@@ -34,6 +35,11 @@ class MainWindow(QMainWindow):
         self._encoder_registry = EncoderRegistry()
         self._queue_manager = QueueManager(get_queue_path())
         self._queue_manager.load()
+        self._preview_cache: PreviewCacheSession | None = PreviewCacheSession()
+        try:
+            self._preview_cache.start()
+        except Exception:
+            self._preview_cache = None
         self._worker: FFmpegWorker | None = None
         self._running_task_display_name = ""
 
@@ -66,7 +72,7 @@ class MainWindow(QMainWindow):
         self._tabs.addTab(self._pic_seq_panel, "图片序列转视频")
 
         # CombatAudio tab
-        self._combat_panel = CombatAudioPanel()
+        self._combat_panel = CombatAudioPanel(preview_cache=self._preview_cache)
         self._tabs.addTab(self._combat_panel, "音视频混合")
 
         # Queue tab
@@ -249,4 +255,6 @@ class MainWindow(QMainWindow):
         self._queue_tab.stop()
         self._queue_manager.save()
         self._combat_panel.cleanup()
+        if self._preview_cache is not None:
+            self._preview_cache.cleanup()
         event.accept()

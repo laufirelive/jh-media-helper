@@ -12,6 +12,7 @@ PURE_AUDIO_EXTENSIONS = {".aac", ".mp3", ".wav", ".flac"}
 @dataclass
 class AudioStreamInfo:
     index: int
+    audio_position: int
     codec: str
     sample_rate: int
     channels: int
@@ -94,10 +95,11 @@ def probe_audio_streams(file_path: str) -> list[AudioStreamInfo]:
         )
         data = json.loads(result.stdout)
         streams = []
-        for stream in data.get("streams", []):
+        for audio_position, stream in enumerate(data.get("streams", [])):
             streams.append(
                 AudioStreamInfo(
                     index=stream["index"],
+                    audio_position=audio_position,
                     codec=stream.get("codec_name", "unknown"),
                     sample_rate=int(stream.get("sample_rate", 0)),
                     channels=stream.get("channels", 0),
@@ -107,6 +109,29 @@ def probe_audio_streams(file_path: str) -> list[AudioStreamInfo]:
         return streams
     except Exception:
         return []
+
+
+def run_ffmpeg_command(cmd: list[str], *, timeout: int, default_message: str) -> str | None:
+    """Run ffmpeg command and return a user-facing error message on failure."""
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        return f"{default_message}\n\n{exc}"
+
+    if result.returncode == 0:
+        return None
+
+    stderr = (result.stderr or "").strip()
+    if not stderr:
+        return default_message
+
+    tail = "\n".join(stderr.splitlines()[-3:])
+    return f"{default_message}\n\n{tail}"
 
 
 _LOUDNORM = "loudnorm=I=-14:TP=-1.0:LRA=15"
@@ -125,13 +150,21 @@ def build_extract_command(input_path: str, stream_index: int, output_path: str) 
 
 
 def build_duration_adjust_command(
-    audio_path: str, target_duration: float, bg_duration: float, output_path: str
+    audio_path: str,
+    target_duration: float,
+    bg_duration: float,
+    output_path: str,
+    *,
+    loop_short_audio: bool = True,
 ) -> list[str]:
-    """Build ffmpeg command to adjust audio duration (trim or loop)."""
+    """构建时长调整命令：长于目标则裁切；短于目标时可循环铺满或仅保留原长（不循环）。"""
     if bg_duration >= target_duration:
         filter_complex = f"atrim=0:{target_duration}"
-    else:
+    elif loop_short_audio:
         filter_complex = f"aloop=-1:1,atrim=0:{target_duration}"
+    else:
+        # 无原片音轨时只裁剪：不拉长，输出时长不超过背景音乐本身
+        filter_complex = f"atrim=0:{bg_duration}"
 
     return [
         "ffmpeg",
@@ -167,7 +200,8 @@ def build_mix_command(
 
 
 def build_mux_command(
-    video_path: str, mixed_audios: list[str], output_path: str
+    video_path: str, mixed_audios: list[str], output_path: str,
+    keep_original_audio: bool = True,
 ) -> list[str]:
     """Build ffmpeg command to mux video with multiple audio tracks."""
     cmd = ["ffmpeg", "-y", "-i", video_path]
@@ -180,7 +214,10 @@ def build_mux_command(
     for i in range(len(mixed_audios)):
         cmd += ["-map", f"{i+1}:a"]
 
-    cmd += ["-map", "0:a", "-c", "copy", output_path]
+    if keep_original_audio:
+        cmd += ["-map", "0:a"]
+
+    cmd += ["-c", "copy", output_path]
 
     return cmd
 

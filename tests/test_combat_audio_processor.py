@@ -13,6 +13,7 @@ from src.core.processors.combat_audio import (
     build_mix_command,
     build_mux_command,
     build_preview_command,
+    run_ffmpeg_command,
     is_pure_audio,
     probe_audio_streams,
     probe_duration,
@@ -26,12 +27,14 @@ class TestAudioStreamInfo:
     def test_fields(self):
         info = AudioStreamInfo(
             index=1,
+            audio_position=0,
             codec="aac",
             sample_rate=48000,
             channels=2,
             channel_layout="stereo",
         )
         assert info.index == 1
+        assert info.audio_position == 0
         assert info.codec == "aac"
         assert info.sample_rate == 48000
         assert info.channels == 2
@@ -159,11 +162,13 @@ class TestProbeAudioStreams:
         streams = probe_audio_streams("/path/to/video.mkv")
         assert len(streams) == 2
         assert streams[0].index == 1
+        assert streams[0].audio_position == 0
         assert streams[0].codec == "aac"
         assert streams[0].sample_rate == 48000
         assert streams[0].channels == 2
         assert streams[0].channel_layout == "stereo"
         assert streams[1].index == 2
+        assert streams[1].audio_position == 1
         assert streams[1].codec == "ac3"
 
     @patch("subprocess.run")
@@ -182,13 +187,13 @@ class TestProbeAudioStreams:
 
 class TestBuildExtractCommand:
     def test_command_structure(self):
-        cmd = build_extract_command("/input/video.mkv", 1, "/output/audio.aac")
+        cmd = build_extract_command("/input/video.mkv", 0, "/output/audio.aac")
         assert cmd[0] == "ffmpeg"
         assert "-y" in cmd
         assert "-i" in cmd
         assert "/input/video.mkv" in cmd
         assert "-map" in cmd
-        assert "0:a:1" in cmd
+        assert "0:a:0" in cmd
         assert "-c:a" in cmd
         assert "copy" in cmd
         assert cmd[-1] == "/output/audio.aac"
@@ -210,6 +215,15 @@ class TestBuildDurationAdjustCommand:
         assert "atrim=0:100.0" in filter_str
         assert "-c:a" in cmd
         assert "aac" in cmd
+
+    def test_trim_only_when_bg_shorter_and_no_loop(self):
+        """无原音场景：短视频不循环，仅保留原背景音乐长度"""
+        cmd = build_duration_adjust_command(
+            "/audio/bg.aac", 100.0, 50.0, "/output/adjusted.aac", loop_short_audio=False
+        )
+        filter_str = " ".join(cmd)
+        assert "aloop" not in filter_str
+        assert "atrim=0:50.0" in filter_str
 
 
 class TestBuildMixCommand:
@@ -259,6 +273,28 @@ class TestBuildPreviewCommand:
         filter_str = " ".join(cmd)
         assert "atrim=0:5" in filter_str
         assert filter_str.count("atrim=0:5") == 2
+
+
+class TestRunFfmpegCommand:
+    @patch("subprocess.run")
+    def test_returns_none_on_success(self, mock_run):
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stderr = ""
+        err = run_ffmpeg_command(["ffmpeg", "-version"], timeout=5, default_message="失败")
+        assert err is None
+
+    @patch("subprocess.run")
+    def test_returns_stderr_tail_on_failure(self, mock_run):
+        mock_run.return_value.returncode = 1
+        mock_run.return_value.stderr = "line1\nline2\nline3\nline4\n"
+        err = run_ffmpeg_command(["ffmpeg"], timeout=5, default_message="失败")
+        assert err == "失败\n\nline2\nline3\nline4"
+
+    @patch("subprocess.run")
+    def test_returns_exception_message(self, mock_run):
+        mock_run.side_effect = TimeoutError("timed out")
+        err = run_ffmpeg_command(["ffmpeg"], timeout=5, default_message="失败")
+        assert err == "失败\n\ntimed out"
 
 
 class TestValidate:

@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -162,28 +163,37 @@ class FFmpegWorker(QThread):
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
     def _combat_audio_pipeline(self, config, is_audio, audio_files, total, tmp_dir):
-        # Phase 1: Extract base audio (get duration)
+        # 检测输入是否含音轨；纯音频输入视为有「原音」可参与混音
+        streams = [] if is_audio else combat_audio.probe_audio_streams(config.input_path)
+        has_audio_streams = is_audio or bool(streams)
+        # 无音轨视频无法与原片混音，等价于关闭混音（避免 base_audio 为空仍走混音阶段）
+        mix_effective = config.mix_enabled and has_audio_streams
+        # 无视频原音时背景音乐只裁到不超过片长，不循环拉长
+        loop_short_bgm = has_audio_streams
+
+        # Phase 1: Extract base audio (only when mixing is needed)
         self.progress.emit(0, total, f"[0/{total}] — 提取音频")
         if self._emit_cancelled_if_needed():
             return
 
-        if is_audio:
-            base_audio = config.input_path
-        else:
-            base_audio = os.path.join(tmp_dir, "extracted.aac")
-            cmd = combat_audio.build_extract_command(
-                config.input_path, config.audio_stream_index, base_audio,
-            )
-            if not self._exec_ffmpeg(cmd):
-                if self._cancel_event.is_set():
-                    self.error.emit("已取消")
+        base_audio = None
+        if mix_effective:
+            if is_audio:
+                base_audio = config.input_path
+            elif has_audio_streams:
+                base_audio = os.path.join(tmp_dir, "extracted.aac")
+                cmd = combat_audio.build_extract_command(
+                    config.input_path, config.audio_stream_index, base_audio,
+                )
+                if not self._exec_ffmpeg(cmd):
+                    if self._cancel_event.is_set():
+                        self.error.emit("已取消")
+                        return
+                    self.error.emit("音频提取失败")
                     return
-                self.error.emit("音频提取失败")
-                return
 
-        base_duration = combat_audio.probe_duration(
-            base_audio if is_audio else config.input_path
-        )
+        # Duration always from container
+        base_duration = combat_audio.probe_duration(config.input_path)
         if base_duration <= 0:
             self.error.emit("无法获取输入时长")
             return
@@ -195,14 +205,20 @@ class FFmpegWorker(QThread):
         adjusted_dir = os.path.join(tmp_dir, "adjusted")
         os.makedirs(adjusted_dir)
         adjusted_paths = self._parallel_phase(
-            config, audio_files, audio_files, total, base_duration, adjusted_dir, "调整时长",
+            config,
+            audio_files,
+            audio_files,
+            total,
+            (base_duration, loop_short_bgm),
+            adjusted_dir,
+            "调整时长",
             self._adjust_one,
         )
         if adjusted_paths is None:
             return
 
-        # Phase 3: Mix (parallel, only if mix_enabled)
-        if config.mix_enabled:
+        # Phase 3: Mix (parallel, only if mix_effective)
+        if mix_effective:
             mixed_dir = os.path.join(tmp_dir, "mixed")
             os.makedirs(mixed_dir)
             items_with_adjusted = [
@@ -226,14 +242,17 @@ class FFmpegWorker(QThread):
         if self._emit_cancelled_if_needed():
             return
 
-        # Phase 4: Mux to MKV (optional)
-        output_paths = combat_audio.resolve_output_path(config, audio_count=len(final_paths))
+        # Phase 4: Mux to MKV (optional)；输出文件名后缀与是否实际混音一致
+        output_paths = combat_audio.resolve_output_path(
+            replace(config, mix_enabled=mix_effective), audio_count=len(final_paths)
+        )
         if config.boxed and not is_audio:
             out_dir = os.path.dirname(output_paths[0])
             os.makedirs(out_dir, exist_ok=True)
             self.progress.emit(total, total, f"[{total}/{total}] — 封装MKV")
             cmd = combat_audio.build_mux_command(
                 config.input_path, final_paths, output_paths[0],
+                keep_original_audio=has_audio_streams,
             )
             if not self._exec_ffmpeg(cmd):
                 if self._cancel_event.is_set():
@@ -282,13 +301,18 @@ class FFmpegWorker(QThread):
                 )
         return results
 
-    def _adjust_one(self, config, filename, idx, base_duration, out_dir):
-        """Adjust one background audio to match base duration."""
+    def _adjust_one(self, config, filename, idx, duration_and_loop, out_dir):
+        """将单条背景音乐对齐基准时长（可禁止循环以适配无原音视频）。"""
+        base_duration, loop_short_audio = duration_and_loop
         audio_path = os.path.join(config.audio_dir, filename)
         bg_duration = combat_audio.probe_duration(audio_path)
         output_path = os.path.join(out_dir, f"adjusted_{idx:02d}.aac")
         cmd = combat_audio.build_duration_adjust_command(
-            audio_path, base_duration, bg_duration, output_path,
+            audio_path,
+            base_duration,
+            bg_duration,
+            output_path,
+            loop_short_audio=loop_short_audio,
         )
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         proc.wait()
