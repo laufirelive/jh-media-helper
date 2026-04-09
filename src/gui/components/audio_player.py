@@ -136,13 +136,51 @@ class AudioPlayerBar(QWidget):
         self._enable_transport_controls()
         self._player.play()
 
-    def play_stream(self, file_path: str, stream_index: int, display_name: str = "") -> str | None:
+    @staticmethod
+    def _build_preview_extract_command(
+        file_path: str,
+        stream_index: int,
+        output_path: str,
+        *,
+        start_seconds: float,
+        duration_seconds: float,
+    ) -> list[str]:
+        """Build the ffmpeg command for preview extraction without mutating a base command."""
+        if start_seconds < 0:
+            raise ValueError("start_seconds must be >= 0")
+        if duration_seconds <= 0:
+            raise ValueError("duration_seconds must be > 0")
+
+        cmd = ["ffmpeg", "-y", "-i", file_path]
+        if start_seconds > 0.0:
+            cmd += ["-ss", f"{start_seconds}"]
+        cmd += [
+            "-t", f"{duration_seconds}",
+            "-map", f"0:a:{stream_index}",
+            "-c:a", "aac",
+            output_path,
+        ]
+        return cmd
+
+    def play_stream(
+        self,
+        file_path: str,
+        stream_index: int,
+        display_name: str = "",
+        *,
+        preview_start_ms: int = 0,
+    ) -> str | None:
         """从视频中抽取指定音轨试听（约 10 秒）。失败时返回错误信息。"""
         self.stop()
+        preview_start_ms = max(0, int(preview_start_ms))
         cache_path: str | None = None
         if self._preview_cache is not None:
             try:
-                cache_key = build_input_track_cache_key(file_path, stream_index)
+                cache_key = build_input_track_cache_key(
+                    file_path,
+                    stream_index,
+                    start_ms=preview_start_ms,
+                )
                 cache_path = self._preview_cache.get_cache_path(cache_key)
             except RuntimeError:
                 cache_path = None
@@ -156,14 +194,15 @@ class AudioPlayerBar(QWidget):
                 self.play_file(cache_path, display_name)
                 return None
 
+        cmd = self._build_preview_extract_command(
+            file_path,
+            stream_index,
+            temp_path,
+            start_seconds=preview_start_ms / 1000.0,
+            duration_seconds=combat_audio.PREVIEW_DURATION_SECONDS,
+        )
         err = combat_audio.run_ffmpeg_command(
-            [
-                "ffmpeg", "-y", "-i", file_path,
-                "-map", f"0:a:{stream_index}",
-                "-t", "10",
-                "-c:a", "aac",
-                temp_path,
-            ],
+            cmd,
             timeout=30,
             default_message="输入音轨试听失败",
         )

@@ -1,4 +1,5 @@
 import os
+import re
 import time
 
 from PyQt6.QtCore import QEvent, Qt, QTimer, pyqtSignal
@@ -62,6 +63,8 @@ QHeaderView::section {
     font-weight: bold;
 }
 """
+
+_PHASE_RE = re.compile(r"^\[(\d+)/(\d+)\]\s*")
 
 
 class QueueTab(QWidget):
@@ -232,10 +235,31 @@ class QueueTab(QWidget):
         if task.status == TaskStatus.CANCELLED:
             return "已取消"
         if task.status == TaskStatus.PROCESSING:
+            if task.progress_desc and task.total > 0:
+                return f"{task.progress_desc} {task.progress}/{task.total}"
             if task.total > 0:
                 return f"编码中 {task.progress}/{task.total}"
             return "编码中..."
         return "等待"
+
+    @staticmethod
+    def _task_completion_fraction(task) -> float:
+        if task.status == TaskStatus.COMPLETED:
+            return 1.0
+        if task.status != TaskStatus.PROCESSING or task.total <= 0:
+            return 0.0
+
+        progress_fraction = max(0.0, min(task.progress / task.total, 1.0))
+        match = _PHASE_RE.match(task.progress_desc or "")
+        if not match:
+            return progress_fraction
+
+        phase_index = int(match.group(1))
+        phase_total = int(match.group(2))
+        if phase_total <= 0:
+            return progress_fraction
+        completed_phases = max(0, min(phase_index - 1, phase_total))
+        return min((completed_phases + progress_fraction) / phase_total, 1.0)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -430,6 +454,7 @@ class QueueTab(QWidget):
         if task:
             task.progress = current
             task.total = total
+            task.progress_desc = desc
 
         self._progress.update_progress(current, total, desc)
         self._update_total_progress()
@@ -452,12 +477,8 @@ class QueueTab(QWidget):
         total_work = 0
         completed_work = 0
         for t in tasks:
-            weight = max(t.total, 1)
-            total_work += weight
-            if t.status == TaskStatus.COMPLETED:
-                completed_work += weight
-            elif t.status == TaskStatus.PROCESSING:
-                completed_work += t.progress
+            total_work += 1
+            completed_work += self._task_completion_fraction(t)
 
         pct = int(completed_work / total_work * 100) if total_work > 0 else 0
         self._total_label.setText(f"总进度 {pct}%")
@@ -467,6 +488,7 @@ class QueueTab(QWidget):
         if task:
             task.status = TaskStatus.COMPLETED
             task.error = None
+            task.progress_desc = ""
         self._cancelling_task_id = None
         self._queue_manager.save()
         self._refresh_table()
@@ -483,6 +505,7 @@ class QueueTab(QWidget):
             if task:
                 task.status = TaskStatus.FAILED
                 task.error = message
+                task.progress_desc = ""
         self._cancelling_task_id = None
         self._queue_manager.save()
         self._refresh_table()

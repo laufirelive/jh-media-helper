@@ -170,14 +170,30 @@ class FFmpegWorker(QThread):
         mix_effective = config.mix_enabled and has_audio_streams
         # 无视频原音时背景音乐只裁到不超过片长，不循环拉长
         loop_short_bgm = has_audio_streams
+        phase_labels: list[str] = []
+        if mix_effective:
+            phase_labels.append("提取音频")
+        phase_labels.append("调整时长")
+        if mix_effective:
+            phase_labels.append("混音")
+        if config.boxed and not is_audio:
+            phase_labels.append("封装MKV")
+        phase_total = max(len(phase_labels), 1)
+        phase_idx = 0
+
+        def phase_desc(index: int, label: str, filename: str | None = None) -> str:
+            desc = f"[{index}/{phase_total}] {label}"
+            if filename:
+                return f"{desc} — {filename}"
+            return desc
 
         # Phase 1: Extract base audio (only when mixing is needed)
-        self.progress.emit(0, total, f"[0/{total}] — 提取音频")
-        if self._emit_cancelled_if_needed():
-            return
-
         base_audio = None
         if mix_effective:
+            phase_idx += 1
+            self.progress.emit(0, 100, phase_desc(phase_idx, "提取音频"))
+            if self._emit_cancelled_if_needed():
+                return
             if is_audio:
                 base_audio = config.input_path
             elif has_audio_streams:
@@ -191,6 +207,7 @@ class FFmpegWorker(QThread):
                         return
                     self.error.emit("音频提取失败")
                     return
+            self.progress.emit(100, 100, phase_desc(phase_idx, "提取音频"))
 
         # Duration always from container
         base_duration = combat_audio.probe_duration(config.input_path)
@@ -202,13 +219,15 @@ class FFmpegWorker(QThread):
             return
 
         # Phase 2: Adjust duration (parallel)
+        phase_idx += 1
         adjusted_dir = os.path.join(tmp_dir, "adjusted")
         os.makedirs(adjusted_dir)
         adjusted_paths = self._parallel_phase(
             config,
             audio_files,
             audio_files,
-            total,
+            phase_idx,
+            phase_total,
             (base_duration, loop_short_bgm),
             adjusted_dir,
             "调整时长",
@@ -219,6 +238,7 @@ class FFmpegWorker(QThread):
 
         # Phase 3: Mix (parallel, only if mix_effective)
         if mix_effective:
+            phase_idx += 1
             mixed_dir = os.path.join(tmp_dir, "mixed")
             os.makedirs(mixed_dir)
             items_with_adjusted = [
@@ -227,7 +247,7 @@ class FFmpegWorker(QThread):
             ]
             display_for_mix = [name for name, _ in items_with_adjusted]
             final_paths = self._parallel_phase(
-                config, items_with_adjusted, display_for_mix, len(items_with_adjusted),
+                config, items_with_adjusted, display_for_mix, phase_idx, phase_total,
                 base_audio, mixed_dir, "混音",
                 lambda cfg, item, idx, base, out_dir: self._mix_one(cfg, item, idx, base, out_dir),
             )
@@ -247,9 +267,10 @@ class FFmpegWorker(QThread):
             replace(config, mix_enabled=mix_effective), audio_count=len(final_paths)
         )
         if config.boxed and not is_audio:
+            phase_idx += 1
             out_dir = os.path.dirname(output_paths[0])
             os.makedirs(out_dir, exist_ok=True)
-            self.progress.emit(total, total, f"[{total}/{total}] — 封装MKV")
+            self.progress.emit(0, 100, phase_desc(phase_idx, "封装MKV"))
             cmd = combat_audio.build_mux_command(
                 config.input_path, final_paths, output_paths[0],
                 keep_original_audio=has_audio_streams,
@@ -260,6 +281,7 @@ class FFmpegWorker(QThread):
                     return
                 self.error.emit("MKV 封装失败")
                 return
+            self.progress.emit(100, 100, phase_desc(phase_idx, "封装MKV"))
             self.finished.emit(output_paths[0])
         else:
             # Copy final audio files to output locations
@@ -270,13 +292,16 @@ class FFmpegWorker(QThread):
                     shutil.copy2(src, output_paths[i])
             self.finished.emit(out_dir)
 
-    def _parallel_phase(self, config, items, display_names, total, extra_arg, out_dir, phase_name, func):
+    def _parallel_phase(self, config, items, display_names, phase_index, phase_total, extra_arg, out_dir, phase_name, func):
         """Run a phase in parallel using ThreadPoolExecutor.
         items: actual work items (str or tuple)
         display_names: list of filenames for progress display (same length as items)
         Returns list of output paths or None on cancel."""
         results = [None] * len(items)
         completed = 0
+        item_total = max(len(items), 1)
+
+        self.progress.emit(0, 100, f"[{phase_index}/{phase_total}] {phase_name}")
 
         def do_one(idx, item):
             return idx, func(config, item, idx, extra_arg, out_dir)
@@ -295,9 +320,10 @@ class FFmpegWorker(QThread):
                     continue
                 results[idx] = path
                 completed += 1
+                pct = int(completed / item_total * 100)
                 self.progress.emit(
-                    completed, total,
-                    f"[{completed}/{total}] {display_names[idx]} — {phase_name}",
+                    pct, 100,
+                    f"[{phase_index}/{phase_total}] {phase_name} — {display_names[idx]}",
                 )
         return results
 

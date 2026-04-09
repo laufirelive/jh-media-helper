@@ -3,9 +3,12 @@ import os
 import tempfile
 from unittest.mock import patch
 
+import pytest
+
 from src.core.config import CombatAudioConfig
 from src.core.processors.combat_audio import (
     PURE_AUDIO_EXTENSIONS,
+    PREVIEW_DURATION_SECONDS,
     AudioFileInfo,
     AudioStreamInfo,
     build_duration_adjust_command,
@@ -198,21 +201,75 @@ class TestBuildExtractCommand:
         assert "copy" in cmd
         assert cmd[-1] == "/output/audio.aac"
 
+    def test_seek_and_duration_follow_input(self):
+        cmd = build_extract_command(
+            "/input/video.mkv",
+            1,
+            "/output/audio.aac",
+            start_seconds=12.5,
+            duration_seconds=8.0,
+        )
+        input_index = cmd.index("-i")
+        seek_index = cmd.index("-ss")
+        duration_index = cmd.index("-t")
+        map_index = cmd.index("-map")
+        assert input_index < seek_index < map_index
+        assert input_index < duration_index < map_index
+
+    def test_supports_start_and_duration(self):
+        cmd = build_extract_command(
+            "/input/video.mkv",
+            1,
+            "/output/audio.aac",
+            start_seconds=12.5,
+            duration_seconds=8.0,
+        )
+        assert "-ss" in cmd
+        assert cmd[cmd.index("-ss") + 1] == "12.5"
+        assert "-t" in cmd
+        assert cmd[cmd.index("-t") + 1] == "8.0"
+        assert cmd[cmd.index("-map") + 1] == "0:a:1"
+
+    def test_omits_seek_and_duration_defaults(self):
+        cmd = build_extract_command("/input/video.mkv", 0, "/output/audio.aac")
+        assert "-ss" not in cmd
+        assert "-t" not in cmd
+
+    def test_rejects_negative_start_seconds(self):
+        with pytest.raises(ValueError, match="start_seconds must be >= 0"):
+            build_extract_command(
+                "/input/video.mkv",
+                0,
+                "/output/audio.aac",
+                start_seconds=-0.1,
+            )
+
+    @pytest.mark.parametrize("duration_seconds", [0.0, -1.0])
+    def test_rejects_non_positive_duration_seconds(self, duration_seconds):
+        with pytest.raises(ValueError, match="duration_seconds must be > 0"):
+            build_extract_command(
+                "/input/video.mkv",
+                0,
+                "/output/audio.aac",
+                duration_seconds=duration_seconds,
+            )
+
 
 class TestBuildDurationAdjustCommand:
     def test_trim_when_bg_longer_than_target(self):
         cmd = build_duration_adjust_command("/audio/bg.aac", 100.0, 150.0, "/output/adjusted.aac")
-        filter_str = " ".join(cmd)
-        assert "atrim=0:100.0" in filter_str
-        assert "aloop" not in filter_str
+        assert "-stream_loop" not in cmd
+        assert "-t" in cmd
+        assert cmd[cmd.index("-t") + 1] == "100.0"
         assert "-c:a" in cmd
         assert "aac" in cmd
 
     def test_loop_when_bg_shorter_than_target(self):
         cmd = build_duration_adjust_command("/audio/bg.aac", 100.0, 50.0, "/output/adjusted.aac")
-        filter_str = " ".join(cmd)
-        assert "aloop=-1:1" in filter_str
-        assert "atrim=0:100.0" in filter_str
+        assert "-stream_loop" in cmd
+        assert cmd[cmd.index("-stream_loop") + 1] == "-1"
+        assert "-t" in cmd
+        assert cmd[cmd.index("-t") + 1] == "100.0"
         assert "-c:a" in cmd
         assert "aac" in cmd
 
@@ -221,9 +278,9 @@ class TestBuildDurationAdjustCommand:
         cmd = build_duration_adjust_command(
             "/audio/bg.aac", 100.0, 50.0, "/output/adjusted.aac", loop_short_audio=False
         )
-        filter_str = " ".join(cmd)
-        assert "aloop" not in filter_str
-        assert "atrim=0:50.0" in filter_str
+        assert "-stream_loop" not in cmd
+        assert "-t" in cmd
+        assert cmd[cmd.index("-t") + 1] == "50.0"
 
 
 class TestBuildMixCommand:
@@ -268,11 +325,84 @@ class TestBuildMuxCommand:
 
 
 class TestBuildPreviewCommand:
-    def test_contains_atrim_5s(self):
+    def test_contains_default_preview_window(self):
         cmd = build_preview_command("/audio/base.aac", "/audio/bg.aac", 0.6, "/output/preview.aac")
         filter_str = " ".join(cmd)
-        assert "atrim=0:5" in filter_str
-        assert filter_str.count("atrim=0:5") == 2
+        expected = f"atrim=start=0.0:end={PREVIEW_DURATION_SECONDS},asetpts=PTS-STARTPTS"
+        assert expected in filter_str
+        assert filter_str.count(expected) == 2
+        assert "-stream_loop" in cmd
+        assert cmd[cmd.index("-stream_loop") + 1] == "-1"
+
+    def test_supports_start_and_duration(self):
+        cmd = build_preview_command(
+            "/audio/base.aac",
+            "/audio/bg.aac",
+            0.6,
+            "/output/preview.aac",
+            start_seconds=2.5,
+            duration_seconds=7.5,
+        )
+        filter_str = " ".join(cmd)
+        expected = "atrim=start=2.5:end=10.0,asetpts=PTS-STARTPTS"
+        assert expected in filter_str
+        assert filter_str.count(expected) == 2
+
+    def test_supports_different_base_and_bg_start_offsets(self):
+        cmd = build_preview_command(
+            "/audio/base.aac",
+            "/audio/bg.aac",
+            0.6,
+            "/output/preview.aac",
+            start_seconds=2.5,
+            base_start_seconds=0.0,
+            bg_start_seconds=2.5,
+            duration_seconds=10.0,
+        )
+        filter_str = " ".join(cmd)
+        assert "atrim=start=0.0:end=10.0,asetpts=PTS-STARTPTS" in filter_str
+        assert "atrim=start=2.5:end=12.5,asetpts=PTS-STARTPTS" in filter_str
+
+    def test_rejects_negative_start_seconds(self):
+        with pytest.raises(ValueError, match="start_seconds must be >= 0"):
+            build_preview_command(
+                "/audio/base.aac",
+                "/audio/bg.aac",
+                0.6,
+                "/output/preview.aac",
+                start_seconds=-1.0,
+            )
+
+    @pytest.mark.parametrize("duration_seconds", [0.0, -1.0])
+    def test_rejects_non_positive_duration_seconds(self, duration_seconds):
+        with pytest.raises(ValueError, match="duration_seconds must be > 0"):
+            build_preview_command(
+                "/audio/base.aac",
+                "/audio/bg.aac",
+                0.6,
+                "/output/preview.aac",
+                duration_seconds=duration_seconds,
+            )
+
+    def test_rejects_negative_base_start_seconds(self):
+        with pytest.raises(ValueError, match="base_start_seconds must be >= 0"):
+            build_preview_command(
+                "/audio/base.aac",
+                "/audio/bg.aac",
+                0.6,
+                "/output/preview.aac",
+                base_start_seconds=-1.0,
+            )
+
+    def test_rejects_negative_bg_start_seconds(self):
+        with pytest.raises(ValueError, match="bg_start_seconds must be >= 0"):
+            build_preview_command(
+                "/audio/base.aac",
+                "/audio/bg.aac",
+                0.6,
+                "/output/preview.aac",
+                bg_start_seconds=-1.0,
+            )
 
 
 class TestRunFfmpegCommand:

@@ -15,22 +15,24 @@ def _build_file_fingerprint(input_path: str) -> str:
     return f"fingerprint=mtime_ns={stat_result.st_mtime_ns},size={stat_result.st_size}"
 
 
-def build_input_track_cache_key(input_path: str, audio_position: int) -> str:
+def build_input_track_cache_key(input_path: str, audio_position: int, start_ms: int = 0) -> str:
     return "|".join([
         "kind=input_track",
         f"input={input_path}",
         _build_file_fingerprint(input_path),
         f"stream={audio_position}",
+        f"start_ms={start_ms}",
         "version=v2",
     ])
 
 
-def build_base_audio_cache_key(input_path: str, audio_position: int) -> str:
+def build_base_audio_cache_key(input_path: str, audio_position: int, start_ms: int = 0) -> str:
     return "|".join([
         "kind=base_audio",
         f"input={input_path}",
         _build_file_fingerprint(input_path),
         f"stream={audio_position}",
+        f"start_ms={start_ms}",
         "version=v1",
     ])
 
@@ -40,12 +42,14 @@ def build_mix_preview_cache_key(
     audio_position: int,
     bg_path: str,
     volume: float,
+    start_ms: int = 0,
 ) -> str:
     return "|".join([
         "kind=mix_preview",
         f"input={input_path}",
         _build_file_fingerprint(input_path),
         f"stream={audio_position}",
+        f"start_ms={start_ms}",
         f"bg={bg_path}",
         _build_file_fingerprint(bg_path),
         f"volume={volume!r}",
