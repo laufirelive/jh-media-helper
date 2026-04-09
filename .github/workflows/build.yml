@@ -1,0 +1,97 @@
+name: Build Portable Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_suffix: Windows
+            package_target: dist/jh-media-helper
+          - os: macos-latest
+            artifact_suffix: macOS-ARM
+            package_target: dist/jh-media-helper.app
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build app
+        run: pyinstaller --clean -y jh-media-helper.spec
+
+      - name: Derive version label
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "VERSION_LABEL=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+          else
+            echo "VERSION_LABEL=manual-${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Create bundled README
+        shell: bash
+        run: |
+          cat > README.txt <<'EOF'
+          jh-media-helper portable build
+
+          This package already includes Python and all Python dependencies.
+          Before running the app, install both ffmpeg and ffprobe.
+
+          Windows:
+            winget install ffmpeg
+
+          macOS:
+            brew install ffmpeg
+          EOF
+
+      - name: Package Windows zip
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path package | Out-Null
+          Copy-Item README.txt package/README.txt
+          Copy-Item -Recurse "${{ matrix.package_target }}" package/jh-media-helper
+          Compress-Archive -Path package\* -DestinationPath "jh-media-helper-$env:VERSION_LABEL-${{ matrix.artifact_suffix }}.zip" -Force
+
+      - name: Package macOS zip
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mkdir -p package
+          cp README.txt package/README.txt
+          cp -R "${{ matrix.package_target }}" package/
+          ditto -c -k --sequesterRsrc --keepParent package "jh-media-helper-${VERSION_LABEL}-${{ matrix.artifact_suffix }}.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jh-media-helper-${{ env.VERSION_LABEL }}-${{ matrix.artifact_suffix }}
+          path: jh-media-helper-${{ env.VERSION_LABEL }}-${{ matrix.artifact_suffix }}.zip
+
+      - name: Upload to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: jh-media-helper-${{ env.VERSION_LABEL }}-${{ matrix.artifact_suffix }}.zip

@@ -167,6 +167,9 @@ def _ensure_pyqt6_stub():
 
 
 def _ensure_main_window_dependency_stubs():
+    sys.modules.pop("src.gui.main_window", None)
+    from PyQt6.QtWidgets import QWidget
+
     class _DummySignal:
         def connect(self, *args, **kwargs):
             return None
@@ -174,9 +177,9 @@ def _ensure_main_window_dependency_stubs():
         def emit(self, *args, **kwargs):
             return None
 
-    class _DummyQtObject:
+    class _DummyQtObject(QWidget):
         def __init__(self, *args, **kwargs):
-            pass
+            super().__init__()
 
         def __getattr__(self, name):
             if name in {"clicked", "preview_enabled_changed", "task_count_changed"}:
@@ -726,6 +729,7 @@ def test_main_window_falls_back_to_no_cache_when_preview_cache_start_fails(qapp,
 
 def test_combat_audio_panel_accepts_preview_cache_without_breaking_construction(qapp, monkeypatch):
     sys.modules.pop("src.gui.task_panels.combat_audio_panel", None)
+    sys.modules.pop("src.gui.task_panels.base_panel", None)
 
     player_calls: list[dict[str, object]] = []
     audio_player = types.ModuleType("src.gui.components.audio_player")
@@ -751,6 +755,7 @@ def test_combat_audio_panel_accepts_preview_cache_without_breaking_construction(
 
 def test_combat_audio_panel_re_raises_unrelated_audio_player_typeerrors(qapp, monkeypatch):
     sys.modules.pop("src.gui.task_panels.combat_audio_panel", None)
+    sys.modules.pop("src.gui.task_panels.base_panel", None)
 
     audio_player = types.ModuleType("src.gui.components.audio_player")
 
