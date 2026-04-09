@@ -236,7 +236,15 @@ def build_mux_command(
     if keep_original_audio:
         cmd += ["-map", "0:a"]
 
-    cmd += ["-c", "copy", output_path]
+    cmd += ["-c", "copy"]
+
+    if mixed_audios:
+        cmd += ["-disposition:a:0", "default"]
+        total_audio_tracks = len(mixed_audios) + (1 if keep_original_audio else 0)
+        for audio_index in range(1, total_audio_tracks):
+            cmd += [f"-disposition:a:{audio_index}", "0"]
+
+    cmd += [output_path]
 
     return cmd
 

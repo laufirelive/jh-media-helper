@@ -4,7 +4,7 @@ import tempfile
 
 import shutil
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QTimer, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -266,6 +266,7 @@ class CombatAudioPanel(BaseTaskPanel):
         self._bg_table.verticalHeader().setSectionsMovable(True)
         self._bg_table.verticalHeader().sectionMoved.connect(self._on_bg_row_moved)
         self._bg_table.setDragDropMode(QTableWidget.DragDropMode.InternalMove)
+        self._bg_table.viewport().installEventFilter(self)
         self._bg_table.setMinimumHeight(160)
         self._bg_table.setSizePolicy(
             QSizePolicy.Policy.Expanding,
@@ -490,16 +491,35 @@ class CombatAudioPanel(BaseTaskPanel):
             self._bg_play_buttons.append(btn)
 
     def _on_bg_row_moved(self, logical: int, old_visual: int, new_visual: int):
-        """Reorder _bg_files after drag-drop and refresh numbering."""
-        if old_visual < 0 or old_visual >= len(self._bg_files):
+        """Internal row-move signal fires before drop fully settles; defer reconciliation to drop handling."""
+        return
+
+    def eventFilter(self, obj, event):
+        viewport = getattr(self._bg_table, "viewport", lambda: None)()
+        if obj is viewport and event.type() == QEvent.Type.Drop:
+            QTimer.singleShot(0, self._reconcile_bg_order_after_drop)
+        return super().eventFilter(obj, event)
+
+    def _reconcile_bg_order_after_drop(self) -> None:
+        """Rebuild `_bg_files` from the current table row order after internal drop."""
+        if self._bg_table.rowCount() != len(self._bg_files):
+            self._refresh_bg_table()
             return
-        if new_visual < 0 or new_visual >= len(self._bg_files):
+
+        by_path = {item.path: item for item in self._bg_files}
+        reordered = []
+        for row in range(self._bg_table.rowCount()):
+            item = self._bg_table.item(row, 1)
+            path = item.data(Qt.ItemDataRole.UserRole) if item else None
+            if not path or path not in by_path:
+                self._refresh_bg_table()
+                return
+            reordered.append(by_path[path])
+
+        if [item.path for item in reordered] == [item.path for item in self._bg_files]:
             return
-        # Build the new order from visual → logical mapping
-        order = list(range(len(self._bg_files)))
-        item = order.pop(old_visual)
-        order.insert(new_visual, item)
-        self._bg_files = [self._bg_files[i] for i in order]
+
+        self._bg_files = reordered
         self._refresh_bg_table()
 
     # --- Preview mix ---

@@ -1,5 +1,6 @@
 import pytest
 from PyQt6.QtWidgets import QApplication, QRadioButton, QWidget
+from unittest.mock import Mock
 
 from src.core.processors.combat_audio import AudioStreamInfo
 from src.gui.components.preview_start_cell import PreviewStartCell
@@ -107,3 +108,41 @@ def test_refresh_tracks_table_preserves_nondefault_selection_when_still_availabl
     assert panel._track_radio_group.checkedId() == 1
     assert _radio_for_row(panel, 1).isChecked()
     assert not _radio_for_row(panel, 0).isChecked()
+
+
+def test_reconcile_bg_order_after_drop_keeps_table_order(panel):
+    class DummyItem:
+        def __init__(self, path: str):
+            self._path = path
+
+        def data(self, role):
+            return self._path
+
+    class DummyTable:
+        def __init__(self, paths: list[str]):
+            self._paths = paths
+
+        def rowCount(self):
+            return len(self._paths)
+
+        def item(self, row: int, column: int):
+            if column != 1:
+                return None
+            return DummyItem(self._paths[row])
+
+    panel._bg_files = [
+        type("Bg", (), {"path": "/music/01.aac", "filename": "01.aac"})(),
+        type("Bg", (), {"path": "/music/02.aac", "filename": "02.aac"})(),
+        type("Bg", (), {"path": "/music/03.aac", "filename": "03.aac"})(),
+    ]
+    panel._bg_table = DummyTable(["/music/02.aac", "/music/03.aac", "/music/01.aac"])
+    panel._refresh_bg_table = Mock()
+
+    panel._reconcile_bg_order_after_drop()
+
+    assert [item.path for item in panel._bg_files] == [
+        "/music/02.aac",
+        "/music/03.aac",
+        "/music/01.aac",
+    ]
+    panel._refresh_bg_table.assert_called_once_with()

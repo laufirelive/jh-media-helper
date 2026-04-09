@@ -323,6 +323,25 @@ class TestBuildMuxCommand:
         assert "-c" in cmd
         assert "copy" in cmd
 
+    def test_sets_first_mixed_audio_as_default_track(self):
+        cmd = build_mux_command("/video/input.mkv", ["/audio/m1.aac", "/audio/m2.aac"], "/output/final.mkv")
+
+        assert "-disposition:a:0" in cmd
+        assert cmd[cmd.index("-disposition:a:0") + 1] == "default"
+        assert "-disposition:a:1" in cmd
+        assert cmd[cmd.index("-disposition:a:1") + 1] == "0"
+
+    def test_clears_original_audio_default_when_kept(self):
+        cmd = build_mux_command(
+            "/video/input.mkv",
+            ["/audio/m1.aac", "/audio/m2.aac"],
+            "/output/final.mkv",
+            keep_original_audio=True,
+        )
+
+        assert "-disposition:a:2" in cmd
+        assert cmd[cmd.index("-disposition:a:2") + 1] == "0"
+
 
 class TestBuildPreviewCommand:
     def test_contains_default_preview_window(self):
