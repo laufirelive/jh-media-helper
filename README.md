@@ -96,17 +96,37 @@ GUI 相关测试在当前项目里通常需要带有 `PyQt6` 的环境，例如�
 PYTHONPATH=. python -m pytest tests/gui/components/test_preview_start_cell.py tests/gui/task_panels/test_combat_audio_panel_preview_start.py -q
 ```
 
-## 打包说明
+## 下载发布版
 
-这个项目适合用 `PyInstaller` 做桌面打包，但需要分别在目标平台构建：
+从 GitHub Releases 下载对应平台的压缩包：
 
-- macOS 上构建 `.app` / `.dmg`
-- Windows 上构建 `.exe`
+- macOS Apple Silicon: `jh-media-helper-vX.Y.Z-macOS-ARM.zip`
+- Windows x64: `jh-media-helper-vX.Y.Z-Windows.zip`
 
-打包时要额外注意：
+解压后即可直接运行：
 
-- `PyQt6 Multimedia` 插件是否被正确带入
-- `ffmpeg` / `ffprobe` 是否随程序分发，或者要求用户预装
+- macOS: `jh-media-helper.app`
+- Windows: `jh-media-helper.exe`
+
+发布版已内置 Python 运行时和 Python 依赖，无需额外安装 Python。
+
+## FFmpeg 依赖
+
+发布版和源码运行都要求系统中可直接找到 `ffmpeg` 与 `ffprobe`。
+
+macOS:
+
+```bash
+brew install ffmpeg
+```
+
+Windows:
+
+```bash
+winget install ffmpeg
+```
+
+如果缺少上述依赖，程序启动时会弹窗提示并退出。
 
 ## 说明
 
