@@ -430,7 +430,7 @@ def test_play_stream_uses_cached_file_when_present(qapp, monkeypatch, tmp_path):
 
     played = {}
 
-    def fake_play_file(file_path, display_name=""):
+    def fake_play_preview_file(file_path, display_name=""):
         played["file_path"] = file_path
         played["display_name"] = display_name
 
@@ -442,7 +442,7 @@ def test_play_stream_uses_cached_file_when_present(qapp, monkeypatch, tmp_path):
     monkeypatch.setattr("src.core.processors.combat_audio.run_ffmpeg_command", mock_run)
 
     player = AudioPlayerBar(preview_cache=session)
-    monkeypatch.setattr(player, "play_file", fake_play_file)
+    monkeypatch.setattr(player, "play_preview_file", fake_play_preview_file)
 
     err = player.play_stream("/tmp/a.mp4", 0, "输入 #1 AAC")
 
@@ -466,7 +466,7 @@ def test_play_stream_uses_preview_start_in_cache_key_for_cached_hits(qapp, monke
 
     played = {}
 
-    def fake_play_file(file_path, display_name=""):
+    def fake_play_preview_file(file_path, display_name=""):
         played["file_path"] = file_path
         played["display_name"] = display_name
 
@@ -478,7 +478,7 @@ def test_play_stream_uses_preview_start_in_cache_key_for_cached_hits(qapp, monke
     monkeypatch.setattr("src.core.processors.combat_audio.run_ffmpeg_command", mock_run)
 
     player = AudioPlayerBar(preview_cache=session)
-    monkeypatch.setattr(player, "play_file", fake_play_file)
+    monkeypatch.setattr(player, "play_preview_file", fake_play_preview_file)
 
     err = player.play_stream("/tmp/a.mp4", 0, "输入 #1 AAC", preview_start_ms=2500)
 
@@ -500,7 +500,7 @@ def test_play_stream_with_preview_cache_miss_writes_to_session_cache_path_and_in
 
     played = {}
 
-    def fake_play_file(file_path, display_name=""):
+    def fake_play_preview_file(file_path, display_name=""):
         played["file_path"] = file_path
         played["display_name"] = display_name
 
@@ -518,7 +518,7 @@ def test_play_stream_with_preview_cache_miss_writes_to_session_cache_path_and_in
     monkeypatch.setattr("src.core.processors.combat_audio.run_ffmpeg_command", mock_run)
 
     player = AudioPlayerBar(preview_cache=session)
-    monkeypatch.setattr(player, "play_file", fake_play_file)
+    monkeypatch.setattr(player, "play_preview_file", fake_play_preview_file)
 
     err = player.play_stream("/tmp/a.mp4", 0, "输入 #1 AAC")
 
@@ -540,7 +540,7 @@ def test_play_stream_with_preview_cache_miss_builds_explicit_preview_command_wit
 
     played = {}
 
-    def fake_play_file(file_path, display_name=""):
+    def fake_play_preview_file(file_path, display_name=""):
         played["file_path"] = file_path
         played["display_name"] = display_name
 
@@ -560,7 +560,7 @@ def test_play_stream_with_preview_cache_miss_builds_explicit_preview_command_wit
     monkeypatch.setattr("src.core.processors.combat_audio.build_extract_command", Mock(side_effect=AssertionError("should not be called")))
 
     player = AudioPlayerBar(preview_cache=session)
-    monkeypatch.setattr(player, "play_file", fake_play_file)
+    monkeypatch.setattr(player, "play_preview_file", fake_play_preview_file)
 
     err = player.play_stream("/tmp/a.mp4", 0, "输入 #1 AAC", preview_start_ms=2500)
 
@@ -570,6 +570,7 @@ def test_play_stream_with_preview_cache_miss_builds_explicit_preview_command_wit
     mock_run.assert_called_once()
     assert mock_run.call_args.args[0][-1] == cache_path
     assert played["cmd"][0] == "ffmpeg"
+    assert played["cmd"][1:5] == ["-y", "-ss", "2.5", "-i"]
     assert "-ss" in played["cmd"]
     assert "2.5" in played["cmd"]
     assert "-t" in played["cmd"]
@@ -592,7 +593,7 @@ def test_play_stream_recovers_from_non_empty_invalid_preview_cache_by_deleting_a
 
     played = {}
 
-    def fake_play_file(file_path, display_name=""):
+    def fake_play_preview_file(file_path, display_name=""):
         played["file_path"] = file_path
         played["display_name"] = display_name
 
@@ -605,7 +606,7 @@ def test_play_stream_recovers_from_non_empty_invalid_preview_cache_by_deleting_a
     monkeypatch.setattr("src.core.processors.combat_audio.run_ffmpeg_command", mock_run)
 
     player = AudioPlayerBar(preview_cache=session)
-    monkeypatch.setattr(player, "play_file", fake_play_file)
+    monkeypatch.setattr(player, "play_preview_file", fake_play_preview_file)
 
     err = player.play_stream("/tmp/a.mp4", 0, "输入 #1 AAC")
 
@@ -615,6 +616,26 @@ def test_play_stream_recovers_from_non_empty_invalid_preview_cache_by_deleting_a
     mock_run.assert_called_once()
     assert mock_run.call_args.args[0][-1] == cache_path
     assert not os.path.exists(cache_path) or os.path.getsize(cache_path) > 0
+
+
+def test_fixed_preview_duration_does_not_force_pause_or_seek(qapp):
+    _ensure_pyqt6_stub()
+    from src.gui.components.audio_player import AudioPlayerBar
+
+    player = AudioPlayerBar()
+    pause_mock = Mock()
+    seek_mock = Mock()
+    player._player = types.SimpleNamespace(
+        duration=lambda: 12_000,
+        pause=pause_mock,
+        setPosition=seek_mock,
+    )
+    player._fixed_duration_ms = 10_000
+
+    player._on_position_changed(10_500)
+
+    pause_mock.assert_not_called()
+    seek_mock.assert_not_called()
 
 
 def test_play_input_stream_preview_passes_shared_preview_start_ms(qapp, monkeypatch):
@@ -835,7 +856,7 @@ def test_preview_mix_cleans_created_temp_dir_on_preview_generation_error(qapp, m
         _bg_table=types.SimpleNamespace(currentRow=lambda: 0),
         _bg_files=[types.SimpleNamespace(path="/music.wav")],
         _volume_spin=types.SimpleNamespace(value=lambda: 0.6),
-        _player=types.SimpleNamespace(play_file=Mock()),
+        _player=types.SimpleNamespace(play_file=Mock(), play_preview_file=Mock()),
         get_preview_btn_enabled=lambda: True,
     )
     panel._cleanup_preview_temp = lambda: combat_audio_panel.CombatAudioPanel._cleanup_preview_temp(panel)
@@ -894,7 +915,7 @@ def test_preview_mix_uses_cached_mix_preview_when_present(qapp, monkeypatch, tmp
         _bg_table=types.SimpleNamespace(currentRow=lambda: 0),
         _bg_files=[types.SimpleNamespace(path=str(bg_path))],
         _volume_spin=types.SimpleNamespace(value=lambda: 0.6),
-        _player=types.SimpleNamespace(play_file=Mock()),
+        _player=types.SimpleNamespace(play_file=Mock(), play_preview_file=Mock()),
         get_preview_btn_enabled=lambda: True,
     )
     panel._cleanup_preview_temp = lambda: combat_audio_panel.CombatAudioPanel._cleanup_preview_temp(panel)
@@ -911,7 +932,8 @@ def test_preview_mix_uses_cached_mix_preview_when_present(qapp, monkeypatch, tmp
 
     combat_audio_panel.CombatAudioPanel.preview_mix(panel)
 
-    panel._player.play_file.assert_called_once_with(preview_path, "试听混合")
+    panel._player.play_preview_file.assert_called_once_with(preview_path, "试听混合")
+    panel._player.play_file.assert_not_called()
     build_extract.assert_not_called()
     build_preview.assert_not_called()
     run_ffmpeg.assert_not_called()
@@ -954,7 +976,7 @@ def test_preview_mix_rebuilds_corrupted_cached_mix_preview(qapp, monkeypatch, tm
         _bg_table=types.SimpleNamespace(currentRow=lambda: 0),
         _bg_files=[types.SimpleNamespace(path=str(bg_path))],
         _volume_spin=types.SimpleNamespace(value=lambda: 0.6),
-        _player=types.SimpleNamespace(play_file=Mock()),
+        _player=types.SimpleNamespace(play_file=Mock(), play_preview_file=Mock()),
         get_preview_btn_enabled=lambda: True,
     )
     panel._cleanup_preview_temp = lambda: combat_audio_panel.CombatAudioPanel._cleanup_preview_temp(panel)
@@ -978,7 +1000,8 @@ def test_preview_mix_rebuilds_corrupted_cached_mix_preview(qapp, monkeypatch, tm
     remove_mock.assert_called_once_with(preview_path)
     build_preview.assert_called_once()
     run_ffmpeg.assert_called_once()
-    panel._player.play_file.assert_called_once_with(preview_path, "试听混合")
+    panel._player.play_preview_file.assert_called_once_with(preview_path, "试听混合")
+    panel._player.play_file.assert_not_called()
     assert os.path.exists(preview_path)
     with open(preview_path, "rb") as f:
         assert f.read() == b"rebuilt"
@@ -1023,7 +1046,7 @@ def test_preview_mix_rebuilds_corrupted_cached_base_audio_before_preview_generat
         _bg_table=types.SimpleNamespace(currentRow=lambda: 0),
         _bg_files=[types.SimpleNamespace(path=str(bg_path))],
         _volume_spin=types.SimpleNamespace(value=lambda: 0.6),
-        _player=types.SimpleNamespace(play_file=Mock()),
+        _player=types.SimpleNamespace(play_file=Mock(), play_preview_file=Mock()),
         get_preview_btn_enabled=lambda: True,
     )
     panel._cleanup_preview_temp = lambda: combat_audio_panel.CombatAudioPanel._cleanup_preview_temp(panel)
@@ -1053,7 +1076,8 @@ def test_preview_mix_rebuilds_corrupted_cached_base_audio_before_preview_generat
     build_extract.assert_called_once()
     build_preview.assert_called_once()
     assert run_ffmpeg.call_count == 2
-    panel._player.play_file.assert_called_once_with(preview_path, "试听混合")
+    panel._player.play_preview_file.assert_called_once_with(preview_path, "试听混合")
+    panel._player.play_file.assert_not_called()
     assert os.path.exists(preview_path)
     assert os.path.exists(base_path)
     assert zero_start_base_path != base_path
@@ -1116,7 +1140,7 @@ def test_preview_mix_for_pure_audio_passes_preview_window_to_mix_helper(qapp, mo
         _bg_table=types.SimpleNamespace(currentRow=lambda: 0),
         _bg_files=[types.SimpleNamespace(path=str(bg_path))],
         _volume_spin=types.SimpleNamespace(value=lambda: 0.6),
-        _player=types.SimpleNamespace(play_file=Mock()),
+        _player=types.SimpleNamespace(play_file=Mock(), play_preview_file=Mock()),
         get_preview_btn_enabled=lambda: True,
     )
     panel._cleanup_preview_temp = lambda: combat_audio_panel.CombatAudioPanel._cleanup_preview_temp(panel)
@@ -1139,7 +1163,8 @@ def test_preview_mix_for_pure_audio_passes_preview_window_to_mix_helper(qapp, mo
         duration_seconds=combat_audio_panel.combat_audio.PREVIEW_DURATION_SECONDS,
     )
     run_ffmpeg.assert_called_once()
-    panel._player.play_file.assert_called_once_with(preview_path, "试听混合")
+    panel._player.play_preview_file.assert_called_once_with(preview_path, "试听混合")
+    panel._player.play_file.assert_not_called()
 
 
 def test_preview_mix_wraps_bg_start_when_preview_offset_exceeds_bg_duration(qapp, monkeypatch, tmp_path):
@@ -1193,7 +1218,7 @@ def test_preview_mix_wraps_bg_start_when_preview_offset_exceeds_bg_duration(qapp
         _bg_table=types.SimpleNamespace(currentRow=lambda: 0),
         _bg_files=[types.SimpleNamespace(path=str(bg_path), duration=60.0)],
         _volume_spin=types.SimpleNamespace(value=lambda: 0.6),
-        _player=types.SimpleNamespace(play_file=Mock()),
+        _player=types.SimpleNamespace(play_file=Mock(), play_preview_file=Mock()),
         get_preview_btn_enabled=lambda: True,
     )
     panel._cleanup_preview_temp = lambda: combat_audio_panel.CombatAudioPanel._cleanup_preview_temp(panel)
@@ -1222,7 +1247,8 @@ def test_preview_mix_wraps_bg_start_when_preview_offset_exceeds_bg_duration(qapp
         duration_seconds=combat_audio_panel.combat_audio.PREVIEW_DURATION_SECONDS,
     )
     run_ffmpeg.assert_called()
-    panel._player.play_file.assert_called_once_with(preview_path, "试听混合")
+    panel._player.play_preview_file.assert_called_once_with(preview_path, "试听混合")
+    panel._player.play_file.assert_not_called()
 
 
 def test_preview_mix_reuses_cached_base_audio_across_different_bgm_selections(qapp, monkeypatch, tmp_path):
@@ -1258,7 +1284,7 @@ def test_preview_mix_reuses_cached_base_audio_across_different_bgm_selections(qa
             types.SimpleNamespace(path=str(bg2_path)),
         ],
         _volume_spin=types.SimpleNamespace(value=lambda: 0.6),
-        _player=types.SimpleNamespace(play_file=Mock()),
+        _player=types.SimpleNamespace(play_file=Mock(), play_preview_file=Mock()),
         get_preview_btn_enabled=lambda: True,
     )
     panel._cleanup_preview_temp = lambda: combat_audio_panel.CombatAudioPanel._cleanup_preview_temp(panel)

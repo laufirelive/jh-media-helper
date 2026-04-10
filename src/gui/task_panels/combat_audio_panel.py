@@ -226,7 +226,7 @@ class CombatAudioPanel(BaseTaskPanel):
         group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(group)
         self._tracks_table = QTableWidget(0, 7)
-        self._tracks_table.setHorizontalHeaderLabels(["", "索引", "编码", "试听起点", "采样率", "声道", ""])
+        self._tracks_table.setHorizontalHeaderLabels(["", "索引", "编码", "试听起点", "采样率", "语言", ""])
         self._tracks_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self._tracks_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self._tracks_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
@@ -298,7 +298,7 @@ class CombatAudioPanel(BaseTaskPanel):
         if self._is_pure_audio:
             ext = os.path.splitext(path)[1].upper().lstrip(".")
             self._input_streams = [combat_audio.AudioStreamInfo(
-                index=0, audio_position=0, codec=ext, sample_rate=0, channels=0, channel_layout="",
+                index=0, audio_position=0, codec=ext, sample_rate=0, channels=0, channel_layout="", language=None,
             )]
         else:
             self._input_streams = combat_audio.probe_audio_streams(path)
@@ -417,8 +417,8 @@ class CombatAudioPanel(BaseTaskPanel):
             sr = f"{stream.sample_rate // 1000}kHz" if stream.sample_rate else "?"
             self._tracks_table.setItem(row, 4, QTableWidgetItem(sr))
 
-            ch = self._channel_label(stream)
-            self._tracks_table.setItem(row, 5, QTableWidgetItem(ch))
+            language = self._language_label(stream)
+            self._tracks_table.setItem(row, 5, QTableWidgetItem(language))
 
             # Play button column
             btn = QPushButton("\u25B6")
@@ -570,7 +570,7 @@ class CombatAudioPanel(BaseTaskPanel):
                 )
             )
             if CombatAudioPanel._is_usable_preview_file(preview_path):
-                self._player.play_file(preview_path, "试听混合")
+                self._player.play_preview_file(preview_path, "试听混合")
                 return
             if os.path.exists(preview_path):
                 CombatAudioPanel._discard_stale_preview_file(preview_path)
@@ -656,7 +656,7 @@ class CombatAudioPanel(BaseTaskPanel):
             return
 
         if os.path.exists(preview_path):
-            self._player.play_file(preview_path, "试听混合")
+            self._player.play_preview_file(preview_path, "试听混合")
         else:
             QMessageBox.critical(self, "错误", "试听混合失败：未生成预览音频")
             self._cleanup_preview_temp()
@@ -719,17 +719,9 @@ class CombatAudioPanel(BaseTaskPanel):
         return max(0, int(self._input_duration * 1000))
 
     @staticmethod
-    def _channel_label(stream: combat_audio.AudioStreamInfo) -> str:
-        if stream.channel_layout:
-            labels = {"stereo": "立体声", "mono": "单声道", "5.1": "5.1声道", "5.1(side)": "5.1声道"}
-            return labels.get(stream.channel_layout, stream.channel_layout)
-        if stream.channels == 1:
-            return "单声道"
-        if stream.channels == 2:
-            return "立体声"
-        if stream.channels == 6:
-            return "5.1声道"
-        return f"{stream.channels}声道" if stream.channels else "?"
+    def _language_label(stream: combat_audio.AudioStreamInfo) -> str:
+        language = (stream.language or "").strip()
+        return language if language else "und"
 
     # --- BaseTaskPanel abstract methods ---
 

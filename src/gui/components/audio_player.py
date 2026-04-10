@@ -31,6 +31,7 @@ class AudioPlayerBar(QWidget):
         self._preview_cache = preview_cache
         self._temp_dir = tempfile.mkdtemp(prefix="jh_player_")
         self._current_temp: str | None = None
+        self._fixed_duration_ms: int | None = None
 
         self._player = QMediaPlayer()
         self._audio_output = QAudioOutput()
@@ -120,9 +121,10 @@ class AudioPlayerBar(QWidget):
         except OSError:
             pass
 
-    def play_file(self, file_path: str, display_name: str = "") -> None:
+    def _play_file(self, file_path: str, display_name: str, *, fixed_duration_ms: int | None) -> None:
         """播放本地音频文件；文件无效则保持不可播状态。"""
         self._reset_player_track()
+        self._fixed_duration_ms = fixed_duration_ms
         name = display_name or os.path.basename(file_path)
         self._name_label.setText(name)
         if not os.path.isfile(file_path):
@@ -135,6 +137,19 @@ class AudioPlayerBar(QWidget):
         self._player.setSource(url)
         self._enable_transport_controls()
         self._player.play()
+
+    def play_file(self, file_path: str, display_name: str = "") -> None:
+        self._play_file(file_path, display_name, fixed_duration_ms=None)
+
+    def play_preview_file(
+        self,
+        file_path: str,
+        display_name: str = "",
+        *,
+        fixed_duration_ms: int | None = None,
+    ) -> None:
+        duration_ms = fixed_duration_ms if fixed_duration_ms is not None else int(combat_audio.PREVIEW_DURATION_SECONDS * 1000)
+        self._play_file(file_path, display_name, fixed_duration_ms=max(0, int(duration_ms)))
 
     @staticmethod
     def _build_preview_extract_command(
@@ -151,9 +166,10 @@ class AudioPlayerBar(QWidget):
         if duration_seconds <= 0:
             raise ValueError("duration_seconds must be > 0")
 
-        cmd = ["ffmpeg", "-y", "-i", file_path]
+        cmd = ["ffmpeg", "-y"]
         if start_seconds > 0.0:
             cmd += ["-ss", f"{start_seconds}"]
+        cmd += ["-i", file_path]
         cmd += [
             "-t", f"{duration_seconds}",
             "-map", f"0:a:{stream_index}",
@@ -191,7 +207,7 @@ class AudioPlayerBar(QWidget):
                 self._discard_stale_preview_cache(cache_path)
             else:
                 self._current_temp = cache_path
-                self.play_file(cache_path, display_name)
+                self.play_preview_file(cache_path, display_name)
                 return None
 
         cmd = self._build_preview_extract_command(
@@ -211,13 +227,14 @@ class AudioPlayerBar(QWidget):
         if not os.path.exists(temp_path):
             return "输入音轨试听失败"
         self._current_temp = temp_path
-        self.play_file(temp_path, display_name)
+        self.play_preview_file(temp_path, display_name)
         return None
 
     def stop(self) -> None:
         """停止播放并清空当前媒体，回到不可播状态。"""
         self._reset_player_track()
         self._current_temp = None
+        self._fixed_duration_ms = None
         self._apply_idle_state()
 
     def is_playing(self) -> bool:
@@ -233,12 +250,21 @@ class AudioPlayerBar(QWidget):
             self._player.play()
 
     def _on_position_changed(self, position: int):
+        display_position = position
+        display_duration = self._player.duration()
+        if self._fixed_duration_ms is not None:
+            display_duration = self._fixed_duration_ms
+            display_position = min(position, self._fixed_duration_ms)
+
         if not self._slider.isSliderDown():
-            self._slider.setValue(position)
-        duration = self._player.duration()
-        self._time_label.setText(f"{_format_time(position)} / {_format_time(duration)}")
+            self._slider.setValue(display_position)
+        self._time_label.setText(f"{_format_time(display_position)} / {_format_time(display_duration)}")
 
     def _on_duration_changed(self, duration: int):
+        if self._fixed_duration_ms is not None:
+            self._slider.setRange(0, self._fixed_duration_ms)
+            self._time_label.setText(f"{_format_time(0)} / {_format_time(self._fixed_duration_ms)}")
+            return
         self._slider.setRange(0, duration)
 
     def _on_slider_moved(self, position: int):
