@@ -28,7 +28,7 @@ def panel(monkeypatch, qapp):
     return widget
 
 
-def _make_stream(index: int, audio_position: int, codec: str) -> AudioStreamInfo:
+def _make_stream(index: int, audio_position: int, codec: str, language: str | None = None) -> AudioStreamInfo:
     return AudioStreamInfo(
         index=index,
         audio_position=audio_position,
@@ -36,6 +36,7 @@ def _make_stream(index: int, audio_position: int, codec: str) -> AudioStreamInfo
         sample_rate=48_000,
         channels=2,
         channel_layout="stereo",
+        language=language,
     )
 
 
@@ -146,3 +147,17 @@ def test_reconcile_bg_order_after_drop_keeps_table_order(panel):
         "/music/01.aac",
     ]
     panel._refresh_bg_table.assert_called_once_with()
+
+
+def test_tracks_table_shows_language_tag_or_und(panel):
+    panel._input_duration = 30.0
+    panel._input_streams = [
+        _make_stream(index=1, audio_position=0, codec="aac", language="jpn"),
+        _make_stream(index=2, audio_position=1, codec="ac3", language=None),
+    ]
+
+    panel._refresh_tracks_table()
+
+    assert panel._tracks_table.horizontalHeaderItem(5).text() == "语言"
+    assert panel._tracks_table.item(0, 5).text() == "jpn"
+    assert panel._tracks_table.item(1, 5).text() == "und"

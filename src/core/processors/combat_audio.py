@@ -18,6 +18,7 @@ class AudioStreamInfo:
     sample_rate: int
     channels: int
     channel_layout: str
+    language: str | None = None
 
 
 @dataclass
@@ -106,8 +107,8 @@ def probe_audio_streams(file_path: str) -> list[AudioStreamInfo]:
                 "ffprobe",
                 "-v", "quiet",
                 "-print_format", "json",
-                "-show_streams",
                 "-select_streams", "a",
+                "-show_entries", "stream=index,codec_name,sample_rate,channels,channel_layout:stream_tags=language",
                 file_path,
             ],
             capture_output=True,
@@ -125,6 +126,7 @@ def probe_audio_streams(file_path: str) -> list[AudioStreamInfo]:
                     sample_rate=int(stream.get("sample_rate", 0)),
                     channels=stream.get("channels", 0),
                     channel_layout=stream.get("channel_layout", ""),
+                    language=(stream.get("tags") or {}).get("language"),
                 )
             )
         return streams
@@ -175,11 +177,12 @@ def build_extract_command(
     cmd = [
         "ffmpeg",
         "-y",
-        "-i", input_path,
     ]
 
     if start_seconds > 0.0:
         cmd += ["-ss", f"{start_seconds}"]
+
+    cmd += ["-i", input_path]
 
     if duration_seconds is not None:
         cmd += ["-t", f"{duration_seconds}"]
@@ -295,26 +298,30 @@ def build_preview_command(
     if resolved_bg_start < 0:
         raise ValueError("bg_start_seconds must be >= 0")
 
-    base_end_seconds = resolved_base_start + duration_seconds
-    bg_end_seconds = resolved_bg_start + duration_seconds
     filter_complex = (
-        f"[0:a]atrim=start={resolved_base_start}:end={base_end_seconds},asetpts=PTS-STARTPTS,{_LOUDNORM}[main];"
-        f"[1:a]atrim=start={resolved_bg_start}:end={bg_end_seconds},asetpts=PTS-STARTPTS,{_LOUDNORM}[bg];"
+        f"[0:a]asetpts=PTS-STARTPTS,{_LOUDNORM}[main];"
+        f"[1:a]asetpts=PTS-STARTPTS,{_LOUDNORM}[bg];"
         f"[main][bg]amix=inputs=2:duration=first:dropout_transition=1:weights={volume} 1:normalize=0,volume=2,{_LOUDNORM}"
     )
 
-    return [
+    cmd = [
         "ffmpeg",
         "-y",
         "-hwaccel", "auto",
-        "-i", base_audio,
-        "-stream_loop", "-1",
-        "-i", bg_audio,
+    ]
+    if resolved_base_start > 0:
+        cmd += ["-ss", f"{resolved_base_start}"]
+    cmd += ["-i", base_audio, "-stream_loop", "-1"]
+    if resolved_bg_start > 0:
+        cmd += ["-ss", f"{resolved_bg_start}"]
+    cmd += ["-i", bg_audio, "-t", f"{duration_seconds}"]
+    cmd += [
         "-filter_complex", filter_complex,
         "-c:a", "aac",
         "-b:a", "192k",
         output_path,
     ]
+    return cmd
 
 
 def validate(config: CombatAudioConfig) -> tuple[bool, str | None]:

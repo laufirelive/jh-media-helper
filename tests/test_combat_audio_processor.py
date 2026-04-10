@@ -36,6 +36,7 @@ class TestAudioStreamInfo:
             sample_rate=48000,
             channels=2,
             channel_layout="stereo",
+            language="jpn",
         )
         assert info.index == 1
         assert info.audio_position == 0
@@ -43,6 +44,7 @@ class TestAudioStreamInfo:
         assert info.sample_rate == 48000
         assert info.channels == 2
         assert info.channel_layout == "stereo"
+        assert info.language == "jpn"
 
 
 class TestAudioFileInfo:
@@ -168,6 +170,7 @@ class TestProbeAudioStreams:
                     "sample_rate": "48000",
                     "channels": 2,
                     "channel_layout": "stereo",
+                    "tags": {"language": "jpn"},
                 },
                 {
                     "index": 2,
@@ -175,6 +178,7 @@ class TestProbeAudioStreams:
                     "sample_rate": "48000",
                     "channels": 6,
                     "channel_layout": "5.1",
+                    "tags": {"language": "eng"},
                 },
             ]
         })
@@ -187,9 +191,11 @@ class TestProbeAudioStreams:
         assert streams[0].sample_rate == 48000
         assert streams[0].channels == 2
         assert streams[0].channel_layout == "stereo"
+        assert streams[0].language == "jpn"
         assert streams[1].index == 2
         assert streams[1].audio_position == 1
         assert streams[1].codec == "ac3"
+        assert streams[1].language == "eng"
 
     @patch("subprocess.run")
     def test_returns_empty_on_failure(self, mock_run):
@@ -228,11 +234,11 @@ class TestBuildExtractCommand:
             start_seconds=12.5,
             duration_seconds=8.0,
         )
-        input_index = cmd.index("-i")
         seek_index = cmd.index("-ss")
+        input_index = cmd.index("-i")
         duration_index = cmd.index("-t")
         map_index = cmd.index("-map")
-        assert input_index < seek_index < map_index
+        assert seek_index < input_index < map_index
         assert input_index < duration_index < map_index
 
     def test_supports_start_and_duration(self):
@@ -384,11 +390,12 @@ class TestBuildPreviewCommand:
     def test_contains_default_preview_window(self):
         cmd = build_preview_command("/audio/base.aac", "/audio/bg.aac", 0.6, "/output/preview.aac")
         filter_str = " ".join(cmd)
-        expected = f"atrim=start=0.0:end={PREVIEW_DURATION_SECONDS},asetpts=PTS-STARTPTS"
-        assert expected in filter_str
-        assert filter_str.count(expected) == 2
+        assert "asetpts=PTS-STARTPTS" in filter_str
+        assert "atrim=start=" not in filter_str
         assert "-stream_loop" in cmd
         assert cmd[cmd.index("-stream_loop") + 1] == "-1"
+        assert "-t" in cmd
+        assert cmd[cmd.index("-t") + 1] == str(PREVIEW_DURATION_SECONDS)
 
     def test_supports_start_and_duration(self):
         cmd = build_preview_command(
@@ -399,10 +406,9 @@ class TestBuildPreviewCommand:
             start_seconds=2.5,
             duration_seconds=7.5,
         )
-        filter_str = " ".join(cmd)
-        expected = "atrim=start=2.5:end=10.0,asetpts=PTS-STARTPTS"
-        assert expected in filter_str
-        assert filter_str.count(expected) == 2
+        assert cmd[:7] == ["ffmpeg", "-y", "-hwaccel", "auto", "-ss", "2.5", "-i"]
+        assert "-t" in cmd
+        assert cmd[cmd.index("-t") + 1] == "7.5"
 
     def test_supports_different_base_and_bg_start_offsets(self):
         cmd = build_preview_command(
@@ -415,9 +421,9 @@ class TestBuildPreviewCommand:
             bg_start_seconds=2.5,
             duration_seconds=10.0,
         )
-        filter_str = " ".join(cmd)
-        assert "atrim=start=0.0:end=10.0,asetpts=PTS-STARTPTS" in filter_str
-        assert "atrim=start=2.5:end=12.5,asetpts=PTS-STARTPTS" in filter_str
+        assert cmd[:5] == ["ffmpeg", "-y", "-hwaccel", "auto", "-i"]
+        bg_i = cmd.index("/audio/bg.aac")
+        assert cmd[bg_i - 5:bg_i + 1] == ["-stream_loop", "-1", "-ss", "2.5", "-i", "/audio/bg.aac"]
 
     def test_rejects_negative_start_seconds(self):
         with pytest.raises(ValueError, match="start_seconds must be >= 0"):
