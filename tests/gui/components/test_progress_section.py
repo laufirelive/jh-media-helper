@@ -34,6 +34,21 @@ def test_set_finished(section):
     section.set_finished("完成: /tmp/out.mov")
     assert not section._progress_bar.isVisible()
     assert "完成" in section._status_label.text()
+    assert not section._error_frame.isVisible()
+
+
+def test_set_error_shows_summary_and_hidden_details_by_default(section):
+    section.set_error("混音失败：bgm.mp3", "ffmpeg stderr line 1\nffmpeg stderr line 2")
+    assert not section._progress_bar.isVisible()
+    assert section._error_frame.isVisible()
+    assert "混音失败" in section._error_summary_label.text()
+    assert not section._error_details.isVisible()
+
+
+def test_error_details_expand_when_toggled(section):
+    section.set_error("混音失败：bgm.mp3", "detail")
+    section._error_toggle.click()
+    assert section._error_details.isVisible()
 
 
 def test_reset(section):
@@ -42,3 +57,4 @@ def test_reset(section):
     assert not section._progress_bar.isVisible()
     assert section._status_label.text() == ""
     assert section._progress_bar.value() == 0
+    assert not section._error_frame.isVisible()

@@ -153,6 +153,7 @@ class QueueTab(QWidget):
         self._btn_cancel = self._action_bar.add_button("取消当前", role="danger", enabled=False)
         self._btn_cancel.clicked.connect(self._on_cancel_current)
         self._table.itemSelectionChanged.connect(self._update_cancel_button_state)
+        self._table.itemSelectionChanged.connect(self._on_selection_changed)
         self._btn_clear = self._action_bar.add_button("清空队列", role="secondary")
         self._btn_clear.clicked.connect(self._on_clear)
         layout.addWidget(self._action_bar)
@@ -199,6 +200,8 @@ class QueueTab(QWidget):
             status_item = QTableWidgetItem(status_text)
             color = _STATUS_COLORS.get(task.status, "#888")
             status_item.setForeground(QColor(color))
+            if task.error:
+                status_item.setToolTip(task.error)
             self._table.setItem(row, 3, status_item)
 
         self.task_count_changed.emit(len(tasks))
@@ -231,7 +234,11 @@ class QueueTab(QWidget):
         if task.status == TaskStatus.COMPLETED:
             return "完成"
         if task.status == TaskStatus.FAILED:
-            return "失败"
+            summary, _ = FFmpegWorker.split_error_message(task.error)
+            if not summary:
+                return "失败"
+            text = f"失败：{summary}"
+            return text if len(text) <= 28 else f"{text[:27]}…"
         if task.status == TaskStatus.CANCELLED:
             return "已取消"
         if task.status == TaskStatus.PROCESSING:
@@ -483,6 +490,34 @@ class QueueTab(QWidget):
         pct = int(completed_work / total_work * 100) if total_work > 0 else 0
         self._total_label.setText(f"总进度 {pct}%")
 
+    def _on_selection_changed(self):
+        self._sync_selected_task_details()
+
+    def _sync_selected_task_details(self):
+        if self._worker is not None:
+            return
+        rows = self._table.selectionModel().selectedRows()
+        if not rows:
+            return
+        row = rows[0].row()
+        tasks = self._queue_manager.tasks
+        if row < 0 or row >= len(tasks):
+            return
+        task = tasks[row]
+        display_name = os.path.basename(task.input_path.rstrip(os.sep)) or task.input_path
+        self._current_label.setText(display_name)
+        if task.status == TaskStatus.FAILED and task.error:
+            summary, details = FFmpegWorker.split_error_message(task.error)
+            self._progress.set_error(summary or "任务失败", details or None)
+            return
+        if task.status == TaskStatus.COMPLETED:
+            self._progress.set_finished("任务已完成")
+            return
+        if task.status == TaskStatus.CANCELLED:
+            self._progress.set_finished("任务已取消")
+            return
+        self._progress.reset()
+
     def _on_task_finished(self, task_id: str):
         task = self._queue_manager.get_task(task_id)
         if task:
@@ -493,6 +528,7 @@ class QueueTab(QWidget):
         self._queue_manager.save()
         self._refresh_table()
         self._worker = None
+        self._sync_selected_task_details()
         self._run_next()
 
     def _on_task_error(self, task_id: str, message: str):
@@ -510,6 +546,10 @@ class QueueTab(QWidget):
         self._queue_manager.save()
         self._refresh_table()
         self._worker = None
+        if not is_cancel:
+            summary, details = FFmpegWorker.split_error_message(message)
+            self._progress.set_error(summary or "任务失败", details or None)
+        self._sync_selected_task_details()
         self._run_next()
 
     def _on_cancel_current(self):
@@ -583,6 +623,7 @@ class QueueTab(QWidget):
 
     def refresh(self):
         self._refresh_table()
+        self._sync_selected_task_details()
 
     def stop(self):
         self._running = False

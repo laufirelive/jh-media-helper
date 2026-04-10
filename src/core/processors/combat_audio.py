@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from src.core.config import CombatAudioConfig
 
-PURE_AUDIO_EXTENSIONS = {".aac", ".mp3", ".wav", ".flac"}
+PURE_AUDIO_EXTENSIONS = {".aac", ".m4a", ".mp3", ".wav", ".flac"}
 PREVIEW_DURATION_SECONDS = 10.0
 
 
@@ -62,7 +62,7 @@ def probe_duration(file_path: str) -> float:
                 "ffprobe",
                 "-v", "quiet",
                 "-print_format", "json",
-                "-show_entries", "format=duration",
+                "-show_entries", "format=duration:stream=duration",
                 file_path,
             ],
             capture_output=True,
@@ -70,10 +70,30 @@ def probe_duration(file_path: str) -> float:
             check=True,
         )
         data = json.loads(result.stdout)
+
+        durations: list[float] = []
+
         duration_str = data.get("format", {}).get("duration")
         if duration_str:
-            return float(duration_str)
-        return 0.0
+            try:
+                value = float(duration_str)
+                if value > 0:
+                    durations.append(value)
+            except (TypeError, ValueError):
+                pass
+
+        for stream in data.get("streams", []):
+            stream_duration = stream.get("duration")
+            if not stream_duration:
+                continue
+            try:
+                value = float(stream_duration)
+                if value > 0:
+                    durations.append(value)
+            except (TypeError, ValueError):
+                continue
+
+        return max(durations) if durations else 0.0
     except Exception:
         return 0.0
 
@@ -166,7 +186,8 @@ def build_extract_command(
 
     cmd += [
         "-map", f"0:a:{stream_index}",
-        "-c:a", "copy",
+        "-c:a", "aac",
+        "-b:a", "192k",
         output_path,
     ]
 
@@ -190,6 +211,7 @@ def build_duration_adjust_command(
         "-i", audio_path,
         "-t", f"{output_duration}",
         "-c:a", "aac",
+        "-b:a", "192k",
         output_path,
     ]
     return cmd
@@ -330,3 +352,16 @@ def resolve_output_path(config: CombatAudioConfig, audio_count: int) -> list[str
         paths.append(os.path.join(output_dir, filename))
 
     return paths
+
+
+def build_export_aac_command(input_path: str, output_path: str) -> list[str]:
+    """Export AAC audio from a containerized temp file to raw ADTS AAC."""
+    return [
+        "ffmpeg",
+        "-y",
+        "-i", input_path,
+        "-vn",
+        "-c:a", "copy",
+        "-f", "adts",
+        output_path,
+    ]

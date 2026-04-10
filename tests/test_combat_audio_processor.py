@@ -12,6 +12,7 @@ from src.core.processors.combat_audio import (
     AudioFileInfo,
     AudioStreamInfo,
     build_duration_adjust_command,
+    build_export_aac_command,
     build_extract_command,
     build_mix_command,
     build_mux_command,
@@ -59,6 +60,9 @@ class TestAudioFileInfo:
 class TestIsPureAudio:
     def test_aac_is_pure_audio(self):
         assert is_pure_audio("/path/to/file.aac") is True
+
+    def test_m4a_is_pure_audio(self):
+        assert is_pure_audio("/path/to/file.m4a") is True
 
     def test_mp3_is_pure_audio(self):
         assert is_pure_audio("/path/to/file.mp3") is True
@@ -139,6 +143,19 @@ class TestProbeDuration:
         duration = probe_duration("/path/to/audio.aac")
         assert duration == 0.0
 
+    @patch("subprocess.run")
+    def test_prefers_longest_positive_duration_from_format_and_streams(self, mock_run):
+        mock_run.return_value.stdout = json.dumps({
+            "format": {"duration": "1440.95"},
+            "streams": [
+                {"duration": "3600.09"},
+                {"duration": "3599.80"},
+            ],
+        })
+        mock_run.return_value.returncode = 0
+        duration = probe_duration("/path/to/audio.aac")
+        assert duration == 3600.09
+
 
 class TestProbeAudioStreams:
     @patch("subprocess.run")
@@ -198,7 +215,9 @@ class TestBuildExtractCommand:
         assert "-map" in cmd
         assert "0:a:0" in cmd
         assert "-c:a" in cmd
-        assert "copy" in cmd
+        assert "aac" in cmd
+        assert "-b:a" in cmd
+        assert "192k" in cmd
         assert cmd[-1] == "/output/audio.aac"
 
     def test_seek_and_duration_follow_input(self):
@@ -263,6 +282,8 @@ class TestBuildDurationAdjustCommand:
         assert cmd[cmd.index("-t") + 1] == "100.0"
         assert "-c:a" in cmd
         assert "aac" in cmd
+        assert "-b:a" in cmd
+        assert "192k" in cmd
 
     def test_loop_when_bg_shorter_than_target(self):
         cmd = build_duration_adjust_command("/audio/bg.aac", 100.0, 50.0, "/output/adjusted.aac")
@@ -272,6 +293,8 @@ class TestBuildDurationAdjustCommand:
         assert cmd[cmd.index("-t") + 1] == "100.0"
         assert "-c:a" in cmd
         assert "aac" in cmd
+        assert "-b:a" in cmd
+        assert "192k" in cmd
 
     def test_trim_only_when_bg_shorter_and_no_loop(self):
         """无原音场景：短视频不循环，仅保留原背景音乐长度"""
@@ -322,6 +345,20 @@ class TestBuildMuxCommand:
         cmd = build_mux_command("/video/input.mkv", ["/audio/m1.aac"], "/output/final.mkv")
         assert "-c" in cmd
         assert "copy" in cmd
+
+
+class TestBuildExportAacCommand:
+    def test_exports_container_audio_to_adts_aac(self):
+        cmd = build_export_aac_command("/tmp/in.m4a", "/tmp/out.aac")
+        assert cmd == [
+            "ffmpeg",
+            "-y",
+            "-i", "/tmp/in.m4a",
+            "-vn",
+            "-c:a", "copy",
+            "-f", "adts",
+            "/tmp/out.aac",
+        ]
 
     def test_sets_first_mixed_audio_as_default_track(self):
         cmd = build_mux_command("/video/input.mkv", ["/audio/m1.aac", "/audio/m2.aac"], "/output/final.mkv")
