@@ -58,6 +58,7 @@ class FFmpegWorker(QThread):
         self._cancel_event = threading.Event()
         self._process: subprocess.Popen | None = None
         self._last_ffmpeg_error_detail: str | None = None
+        self._parallel_phase_failures: list[tuple[str, str]] = []
 
     def _emit_cancelled_if_needed(self) -> bool:
         """若已请求取消则发出 error 并返回 True（用于 Popen 前等阶段及时退出）。"""
@@ -373,7 +374,20 @@ class FFmpegWorker(QThread):
         # Filter out None results from failed items
         final_paths = [p for p in final_paths if p is not None]
         if not final_paths:
-            self.error.emit("未生成任何输出音频")
+            if self._parallel_phase_failures:
+                detail_lines = [
+                    f"{name}: {reason}" for name, reason in self._parallel_phase_failures[:5]
+                ]
+                if len(self._parallel_phase_failures) > 5:
+                    detail_lines.append(f"... 共 {len(self._parallel_phase_failures)} 个失败项")
+                self.error.emit(
+                    self._compose_error_message(
+                        "未生成任何输出音频",
+                        "\n".join(detail_lines),
+                    )
+                )
+            else:
+                self.error.emit("未生成任何输出音频")
             return
 
         if self._emit_cancelled_if_needed():
@@ -425,6 +439,7 @@ class FFmpegWorker(QThread):
         display_names: list of filenames for progress display (same length as items)
         Returns list of output paths or None on cancel."""
         results = [None] * len(items)
+        failures: list[tuple[str, str]] = []
         completed = 0
         item_total = max(len(items), 1)
         item_progress = [0] * len(items)
@@ -458,10 +473,15 @@ class FFmpegWorker(QThread):
                 if self._cancel_event.is_set():
                     pool.shutdown(wait=False, cancel_futures=True)
                     self.error.emit("已取消")
+                    self._parallel_phase_failures = failures
                     return None
                 try:
                     idx, path = future.result()
-                except Exception:
+                except Exception as exc:
+                    idx = futures[future]
+                    display_name = display_names[idx] if idx < len(display_names) else f"item_{idx}"
+                    detail = str(exc).strip() or exc.__class__.__name__
+                    failures.append((display_name, detail))
                     completed += 1
                     continue
                 update_item_progress(idx, 100)
@@ -470,8 +490,9 @@ class FFmpegWorker(QThread):
                 pct = int(completed / item_total * 100)
                 self.progress.emit(
                     pct, 100,
-                    f"[{phase_index}/{phase_total}] {phase_name} — {display_names[idx]}",
+                    f"[{phase_index}/{phase_total}] {phase_name} - {display_names[idx]}",
                 )
+        self._parallel_phase_failures = failures
         return results
 
     def _adjust_one(self, config, filename, idx, duration_and_loop, out_dir, progress_cb=None):

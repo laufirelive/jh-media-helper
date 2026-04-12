@@ -313,6 +313,11 @@ class TestBuildDurationAdjustCommand:
 
 
 class TestBuildMixCommand:
+    def test_resets_pts_before_loudnorm(self):
+        cmd = build_mix_command("/audio/base.aac", "/audio/bg.aac", 0.6, "/output/mixed.aac")
+        filter_str = " ".join(cmd)
+        assert "asetpts=PTS-STARTPTS" in filter_str
+
     def test_contains_loudnorm(self):
         cmd = build_mix_command("/audio/base.aac", "/audio/bg.aac", 0.6, "/output/mixed.aac")
         filter_str = " ".join(cmd)

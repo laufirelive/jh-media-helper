@@ -312,3 +312,43 @@ class TestWorkerProgress:
 
         assert errors == ["未生成任何输出音频"]
         assert finished == []
+
+    def test_combat_audio_pipeline_includes_parallel_failure_details_when_all_outputs_fail(self, monkeypatch):
+        worker = FFmpegWorker(TaskType.COMBAT_AUDIO, {}, encoder_registry=None)
+        errors = []
+        worker.error.connect(errors.append)
+
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.probe_audio_streams", lambda path: [object()])
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.probe_duration", lambda path: 20.0)
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.build_extract_command", lambda *args, **kwargs: ["ffmpeg"])
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.resolve_output_path", lambda *args, **kwargs: [])
+        monkeypatch.setattr(FFmpegWorker, "_exec_ffmpeg", lambda *args, **kwargs: True)
+
+        def fake_parallel_phase(self, config, items, *args, **kwargs):
+            if len(items) == 2 and isinstance(items[0], tuple):
+                self._parallel_phase_failures = [
+                    ("bg1.aac", "mix failed: bg1.aac"),
+                    ("bg2.aac", "mix failed: bg2.aac"),
+                ]
+                return [None, None]
+            self._parallel_phase_failures = []
+            return ["/tmp/adjusted_00.m4a", "/tmp/adjusted_01.m4a"]
+
+        monkeypatch.setattr(FFmpegWorker, "_parallel_phase", fake_parallel_phase)
+
+        config = CombatAudioConfig(
+            input_path="/tmp/in.mkv",
+            audio_dir="/tmp/audio",
+            output_dir="/tmp",
+            mix_enabled=True,
+            boxed=False,
+            audio_stream_index=0,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            worker._combat_audio_pipeline(config, False, ["bg1.aac", "bg2.aac"], 2, tmp_dir)
+
+        assert len(errors) == 1
+        assert "未生成任何输出音频" in errors[0]
+        assert "bg1.aac: mix failed: bg1.aac" in errors[0]
+        assert "bg2.aac: mix failed: bg2.aac" in errors[0]

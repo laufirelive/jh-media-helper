@@ -225,8 +225,8 @@ def build_mix_command(
 ) -> list[str]:
     """Build ffmpeg command to mix base and background audio with loudnorm."""
     filter_complex = (
-        f"[0:a]{_LOUDNORM}[main];"
-        f"[1:a]{_LOUDNORM}[bg];"
+        f"[0:a]asetpts=PTS-STARTPTS,{_LOUDNORM}[main];"
+        f"[1:a]asetpts=PTS-STARTPTS,{_LOUDNORM}[bg];"
         f"[main][bg]amix=inputs=2:duration=first:dropout_transition=1:weights={volume} 1:normalize=0,volume=2,{_LOUDNORM}"
     )
 
