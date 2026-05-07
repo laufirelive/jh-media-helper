@@ -400,9 +400,14 @@ class FFmpegWorker(QThread):
         )
         if config.boxed and not is_audio:
             phase_idx += 1
+            videos_to_mux = [config.input_path] + list(config.secondary_video_paths or [])
+            if not output_paths or len(output_paths) != len(videos_to_mux):
+                self.error.emit(
+                    f"MKV 输出数量异常：需要 {len(videos_to_mux)} 个，实际 {len(output_paths)} 个"
+                )
+                return
             out_dir = os.path.dirname(output_paths[0])
             os.makedirs(out_dir, exist_ok=True)
-            videos_to_mux = [config.input_path] + list(config.secondary_video_paths or [])
             mux_jobs = list(zip(videos_to_mux, output_paths))
             mux_backend, mkvmerge_path = resolve_mux_backend(config.mux_backend, config.mkvmerge_path)
             mux_total = max(len(mux_jobs), 1)

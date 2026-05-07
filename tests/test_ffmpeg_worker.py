@@ -324,6 +324,85 @@ class TestWorkerProgress:
         assert probe_calls == ["/tmp/in.mkv", "/tmp/in.mkv", "/tmp/part2.mkv", "/tmp/part3.mkv"]
         assert finished == ["/tmp/out"]
 
+    def test_combat_audio_pipeline_errors_when_boxed_output_paths_fewer_than_videos(self, monkeypatch):
+        worker = FFmpegWorker(TaskType.COMBAT_AUDIO, {}, encoder_registry=None)
+        errors = []
+        exec_calls = []
+        mux_calls = []
+        worker.error.connect(errors.append)
+
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.probe_audio_streams", lambda path: [object()])
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.probe_duration", lambda path: 20.0)
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.resolve_output_path", lambda *args, **kwargs: ["/tmp/out/in-part1.mkv"])
+        monkeypatch.setattr(
+            FFmpegWorker,
+            "_parallel_phase",
+            lambda self, *args, **kwargs: ["/tmp/adjusted_00.m4a"],
+        )
+
+        def fake_build_mux(*args, **kwargs):
+            mux_calls.append(args)
+            return ["ffmpeg", "mux"]
+
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.build_mux_command", fake_build_mux)
+        monkeypatch.setattr(FFmpegWorker, "_exec_ffmpeg", lambda self, *args, **kwargs: exec_calls.append(args) or True)
+
+        config = CombatAudioConfig(
+            input_path="/tmp/in.mkv",
+            audio_dir="/tmp/audio",
+            output_dir="/tmp/out",
+            mix_enabled=False,
+            boxed=True,
+            secondary_video_paths=["/tmp/part2.mkv", "/tmp/part3.mkv"],
+            audio_stream_index=0,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            worker._combat_audio_pipeline(config, False, ["bg.aac"], 1, tmp_dir)
+
+        assert errors == ["MKV 输出数量异常：需要 3 个，实际 1 个"]
+        assert mux_calls == []
+        assert exec_calls == []
+
+    def test_combat_audio_pipeline_errors_when_boxed_output_paths_empty(self, monkeypatch):
+        worker = FFmpegWorker(TaskType.COMBAT_AUDIO, {}, encoder_registry=None)
+        errors = []
+        exec_calls = []
+        mux_calls = []
+        worker.error.connect(errors.append)
+
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.probe_audio_streams", lambda path: [object()])
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.probe_duration", lambda path: 20.0)
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.resolve_output_path", lambda *args, **kwargs: [])
+        monkeypatch.setattr(
+            FFmpegWorker,
+            "_parallel_phase",
+            lambda self, *args, **kwargs: ["/tmp/adjusted_00.m4a"],
+        )
+
+        def fake_build_mux(*args, **kwargs):
+            mux_calls.append(args)
+            return ["ffmpeg", "mux"]
+
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.build_mux_command", fake_build_mux)
+        monkeypatch.setattr(FFmpegWorker, "_exec_ffmpeg", lambda self, *args, **kwargs: exec_calls.append(args) or True)
+
+        config = CombatAudioConfig(
+            input_path="/tmp/in.mkv",
+            audio_dir="/tmp/audio",
+            output_dir="/tmp/out",
+            mix_enabled=False,
+            boxed=True,
+            audio_stream_index=0,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            worker._combat_audio_pipeline(config, False, ["bg.aac"], 1, tmp_dir)
+
+        assert errors == ["MKV 输出数量异常：需要 1 个，实际 0 个"]
+        assert mux_calls == []
+        assert exec_calls == []
+
     def test_combat_audio_pipeline_falls_back_to_ffmpeg_mux_backend_for_single_output(self, monkeypatch):
         worker = FFmpegWorker(TaskType.COMBAT_AUDIO, {}, encoder_registry=None)
         mux_calls = []
