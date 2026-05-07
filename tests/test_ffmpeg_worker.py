@@ -2,6 +2,7 @@ import subprocess
 import tempfile
 
 from src.core.config import CombatAudioConfig, TaskType
+from src.core.external_tools import MuxBackend
 from src.worker.ffmpeg_worker import FFmpegWorker, parse_progress, parse_time_progress_seconds
 
 
@@ -252,7 +253,120 @@ class TestWorkerProgress:
             worker._combat_audio_pipeline(config, False, ["bg.aac"], 1, tmp_dir)
 
         assert exec_calls[1][1] == 20.0
-        assert exec_calls[1][2] == "[4/4] 封装MKV"
+        assert exec_calls[1][2] == "[4/4] 封装MKV part 1/1 — in.mkv"
+
+    def test_combat_audio_pipeline_muxes_main_and_secondary_videos_with_mkvmerge(self, monkeypatch):
+        worker = FFmpegWorker(TaskType.COMBAT_AUDIO, {}, encoder_registry=None)
+        exec_calls = []
+        mkvmerge_calls = []
+        probe_calls = []
+        finished = []
+        worker.finished.connect(finished.append)
+
+        def fake_probe_audio_streams(path):
+            probe_calls.append(path)
+            return [] if path.endswith("part2.mkv") else [object()]
+
+        def fake_build_mkvmerge(mkvmerge_path, video_path, final_paths, output_path, *, keep_original_audio=True):
+            mkvmerge_calls.append((mkvmerge_path, video_path, list(final_paths), output_path, keep_original_audio))
+            return ["mkvmerge", video_path, output_path]
+
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.probe_audio_streams", fake_probe_audio_streams)
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.probe_duration", lambda path: 20.0)
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.build_extract_command", lambda *args, **kwargs: ["ffmpeg", "extract"])
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.build_mkvmerge_mux_command", fake_build_mkvmerge)
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.resolve_output_path", lambda *args, **kwargs: [
+            "/tmp/out/in-part1.mkv",
+            "/tmp/out/in-part2.mkv",
+            "/tmp/out/in-part3.mkv",
+        ])
+        monkeypatch.setattr(
+            "src.worker.ffmpeg_worker.resolve_mux_backend",
+            lambda requested, mkvmerge_path: (MuxBackend.MKVMERGE, "/usr/bin/mkvmerge"),
+        )
+        monkeypatch.setattr(
+            FFmpegWorker,
+            "_parallel_phase",
+            lambda self, *args, **kwargs: ["/tmp/mixed_00.m4a", "/tmp/mixed_01.m4a"],
+        )
+
+        def fake_exec(self, cmd, *, progress_total=None, progress_desc="处理中"):
+            exec_calls.append((cmd, progress_total, progress_desc))
+            return True
+
+        monkeypatch.setattr(FFmpegWorker, "_exec_ffmpeg", fake_exec)
+
+        config = CombatAudioConfig(
+            input_path="/tmp/in.mkv",
+            audio_dir="/tmp/audio",
+            output_dir="/tmp/out",
+            mix_enabled=True,
+            boxed=True,
+            secondary_video_paths=["/tmp/part2.mkv", "/tmp/part3.mkv"],
+            audio_stream_index=0,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            worker._combat_audio_pipeline(config, False, ["bg1.aac", "bg2.aac"], 2, tmp_dir)
+
+        final_paths = ["/tmp/mixed_00.m4a", "/tmp/mixed_01.m4a"]
+        assert exec_calls == [
+            (["ffmpeg", "extract"], 20.0, "[1/4] 提取音频"),
+            (["mkvmerge", "/tmp/in.mkv", "/tmp/out/in-part1.mkv"], 20.0, "[4/4] 封装MKV part 1/3 — in.mkv"),
+            (["mkvmerge", "/tmp/part2.mkv", "/tmp/out/in-part2.mkv"], 20.0, "[4/4] 封装MKV part 2/3 — part2.mkv"),
+            (["mkvmerge", "/tmp/part3.mkv", "/tmp/out/in-part3.mkv"], 20.0, "[4/4] 封装MKV part 3/3 — part3.mkv"),
+        ]
+        assert mkvmerge_calls == [
+            ("/usr/bin/mkvmerge", "/tmp/in.mkv", final_paths, "/tmp/out/in-part1.mkv", True),
+            ("/usr/bin/mkvmerge", "/tmp/part2.mkv", final_paths, "/tmp/out/in-part2.mkv", False),
+            ("/usr/bin/mkvmerge", "/tmp/part3.mkv", final_paths, "/tmp/out/in-part3.mkv", True),
+        ]
+        assert probe_calls == ["/tmp/in.mkv", "/tmp/in.mkv", "/tmp/part2.mkv", "/tmp/part3.mkv"]
+        assert finished == ["/tmp/out"]
+
+    def test_combat_audio_pipeline_falls_back_to_ffmpeg_mux_backend_for_single_output(self, monkeypatch):
+        worker = FFmpegWorker(TaskType.COMBAT_AUDIO, {}, encoder_registry=None)
+        mux_calls = []
+        finished = []
+        worker.finished.connect(finished.append)
+
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.probe_audio_streams", lambda path: [object()])
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.probe_duration", lambda path: 20.0)
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.build_extract_command", lambda *args, **kwargs: ["ffmpeg", "extract"])
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.resolve_output_path", lambda *args, **kwargs: ["/tmp/out.mkv"])
+        monkeypatch.setattr(
+            "src.worker.ffmpeg_worker.resolve_mux_backend",
+            lambda requested, mkvmerge_path: (MuxBackend.FFMPEG, None),
+        )
+        monkeypatch.setattr(
+            FFmpegWorker,
+            "_parallel_phase",
+            lambda self, *args, **kwargs: ["/tmp/mixed_00.m4a"],
+        )
+
+        def fake_build_mux(video_path, final_paths, output_path, keep_original_audio=True):
+            mux_calls.append((video_path, list(final_paths), output_path, keep_original_audio))
+            return ["ffmpeg", "mux"]
+
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.build_mux_command", fake_build_mux)
+        monkeypatch.setattr(FFmpegWorker, "_exec_ffmpeg", lambda *args, **kwargs: True)
+
+        config = CombatAudioConfig(
+            input_path="/tmp/in.mkv",
+            audio_dir="/tmp/audio",
+            output_dir="/tmp",
+            mix_enabled=True,
+            boxed=True,
+            audio_stream_index=0,
+            mux_backend="ffmpeg",
+            mkvmerge_path="/bad/mkvmerge",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            worker._combat_audio_pipeline(config, False, ["bg.aac"], 1, tmp_dir)
+
+        assert mux_calls == [("/tmp/in.mkv", ["/tmp/mixed_00.m4a"], "/tmp/out.mkv", True)]
+        assert finished == ["/tmp/out.mkv"]
 
     def test_mix_phase_uses_original_input_duration_instead_of_probe_from_temp_aac(self, monkeypatch):
         worker = FFmpegWorker(TaskType.COMBAT_AUDIO, {}, encoder_registry=None)
