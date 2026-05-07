@@ -396,7 +396,9 @@ class FFmpegWorker(QThread):
 
         # Phase 4: Mux to MKV (optional)；输出文件名后缀与是否实际混音一致
         output_paths = combat_audio.resolve_output_path(
-            replace(config, mix_enabled=mix_effective), audio_count=len(final_paths)
+            replace(config, mix_enabled=mix_effective),
+            audio_count=len(final_paths),
+            audio_filenames=audio_files,
         )
         if config.boxed and not is_audio:
             phase_idx += 1

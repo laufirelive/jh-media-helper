@@ -506,6 +506,96 @@ class TestWorkerProgress:
         assert errors == ["未生成任何输出音频"]
         assert finished == []
 
+    def test_combat_audio_pipeline_uses_audio_filenames_for_non_boxed_exports(self, monkeypatch):
+        worker = FFmpegWorker(TaskType.COMBAT_AUDIO, {}, encoder_registry=None)
+        resolve_calls = []
+        export_calls = []
+
+        audio_files = ["z_theme.aac", "a_theme.aac"]
+        final_paths = ["/tmp/final_z.m4a", "/tmp/final_a.m4a"]
+        output_paths = ["/tmp/out/01_z_theme_aligned.aac", "/tmp/out/02_a_theme_aligned.aac"]
+
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.probe_audio_streams", lambda path: [])
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.probe_duration", lambda path: 20.0)
+        monkeypatch.setattr(
+            FFmpegWorker,
+            "_parallel_phase",
+            lambda self, *args, **kwargs: list(final_paths),
+        )
+
+        def fake_resolve_output_path(config, audio_count, **kwargs):
+            resolve_calls.append((audio_count, kwargs))
+            return list(output_paths)
+
+        def fake_build_export(input_path, output_path):
+            export_calls.append((input_path, output_path))
+            return ["ffmpeg", input_path, output_path]
+
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.resolve_output_path", fake_resolve_output_path)
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.build_export_aac_command", fake_build_export)
+        monkeypatch.setattr(FFmpegWorker, "_exec_ffmpeg", lambda *args, **kwargs: True)
+
+        config = CombatAudioConfig(
+            input_path="/tmp/in.mkv",
+            audio_dir="/tmp/audio",
+            output_dir="/tmp/out",
+            mix_enabled=False,
+            boxed=False,
+            audio_stream_index=0,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            worker._combat_audio_pipeline(config, False, audio_files, len(audio_files), tmp_dir)
+
+        assert resolve_calls == [(2, {"audio_filenames": audio_files})]
+        assert export_calls == list(zip(final_paths, output_paths))
+
+    def test_combat_audio_pipeline_keeps_original_audio_filenames_when_some_outputs_fail(self, monkeypatch):
+        worker = FFmpegWorker(TaskType.COMBAT_AUDIO, {}, encoder_registry=None)
+        resolve_calls = []
+        export_calls = []
+
+        audio_files = ["z_theme.aac", "a_theme.aac", "m_theme.aac"]
+        output_paths = ["/tmp/out/01_z_theme_aligned.aac", "/tmp/out/02_a_theme_aligned.aac"]
+
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.probe_audio_streams", lambda path: [])
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.probe_duration", lambda path: 20.0)
+        monkeypatch.setattr(
+            FFmpegWorker,
+            "_parallel_phase",
+            lambda self, *args, **kwargs: ["/tmp/final_z.m4a", None, "/tmp/final_m.m4a"],
+        )
+
+        def fake_resolve_output_path(config, audio_count, **kwargs):
+            resolve_calls.append((audio_count, kwargs))
+            return list(output_paths)
+
+        def fake_build_export(input_path, output_path):
+            export_calls.append((input_path, output_path))
+            return ["ffmpeg", input_path, output_path]
+
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.resolve_output_path", fake_resolve_output_path)
+        monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.build_export_aac_command", fake_build_export)
+        monkeypatch.setattr(FFmpegWorker, "_exec_ffmpeg", lambda *args, **kwargs: True)
+
+        config = CombatAudioConfig(
+            input_path="/tmp/in.mkv",
+            audio_dir="/tmp/audio",
+            output_dir="/tmp/out",
+            mix_enabled=False,
+            boxed=False,
+            audio_stream_index=0,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            worker._combat_audio_pipeline(config, False, audio_files, len(audio_files), tmp_dir)
+
+        assert resolve_calls == [(2, {"audio_filenames": audio_files})]
+        assert export_calls == [
+            ("/tmp/final_z.m4a", "/tmp/out/01_z_theme_aligned.aac"),
+            ("/tmp/final_m.m4a", "/tmp/out/02_a_theme_aligned.aac"),
+        ]
+
     def test_combat_audio_pipeline_includes_parallel_failure_details_when_all_outputs_fail(self, monkeypatch):
         worker = FFmpegWorker(TaskType.COMBAT_AUDIO, {}, encoder_registry=None)
         errors = []
