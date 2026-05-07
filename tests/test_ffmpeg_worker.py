@@ -556,7 +556,7 @@ class TestWorkerProgress:
         export_calls = []
 
         audio_files = ["z_theme.aac", "a_theme.aac", "m_theme.aac"]
-        output_paths = ["/tmp/out/01_z_theme_aligned.aac", "/tmp/out/02_a_theme_aligned.aac"]
+        output_paths = ["/tmp/out/01_z_theme_aligned.aac", "/tmp/out/02_m_theme_aligned.aac"]
 
         monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.probe_audio_streams", lambda path: [])
         monkeypatch.setattr("src.worker.ffmpeg_worker.combat_audio.probe_duration", lambda path: 20.0)
@@ -590,10 +590,10 @@ class TestWorkerProgress:
         with tempfile.TemporaryDirectory() as tmp_dir:
             worker._combat_audio_pipeline(config, False, audio_files, len(audio_files), tmp_dir)
 
-        assert resolve_calls == [(2, {"audio_filenames": audio_files})]
+        assert resolve_calls == [(2, {"audio_filenames": ["z_theme.aac", "m_theme.aac"]})]
         assert export_calls == [
             ("/tmp/final_z.m4a", "/tmp/out/01_z_theme_aligned.aac"),
-            ("/tmp/final_m.m4a", "/tmp/out/02_a_theme_aligned.aac"),
+            ("/tmp/final_m.m4a", "/tmp/out/02_m_theme_aligned.aac"),
         ]
 
     def test_combat_audio_pipeline_includes_parallel_failure_details_when_all_outputs_fail(self, monkeypatch):

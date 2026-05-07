@@ -350,30 +350,36 @@ class FFmpegWorker(QThread):
         if adjusted_paths is None:
             return
 
+        adjusted_items = [
+            (name, adj) for name, adj in zip(audio_files, adjusted_paths)
+            if adj is not None
+        ]
+
         # Phase 3: Mix (parallel, only if mix_effective)
         if mix_effective:
             phase_idx += 1
             mixed_dir = os.path.join(tmp_dir, "mixed")
             os.makedirs(mixed_dir)
-            items_with_adjusted = [
-                (name, adj) for name, adj in zip(audio_files, adjusted_paths)
-                if adj is not None
-            ]
+            items_with_adjusted = adjusted_items
             display_for_mix = [name for name, _ in items_with_adjusted]
-            final_paths = self._parallel_phase(
+            mixed_paths = self._parallel_phase(
                 config, items_with_adjusted, display_for_mix, phase_idx, phase_total,
                 (base_audio, base_duration), mixed_dir, "混音",
                 lambda cfg, item, idx, mix_input, out_dir, progress_cb=None: self._mix_one(
                     cfg, item, idx, mix_input, out_dir, progress_cb=progress_cb
                 ),
             )
-            if final_paths is None:
+            if mixed_paths is None:
                 return
+            final_items = [
+                (name, path) for name, path in zip(display_for_mix, mixed_paths)
+                if path is not None
+            ]
         else:
-            final_paths = [p for p in adjusted_paths if p is not None]
+            final_items = adjusted_items
 
-        # Filter out None results from failed items
-        final_paths = [p for p in final_paths if p is not None]
+        final_audio_filenames = [name for name, _ in final_items]
+        final_paths = [path for _, path in final_items]
         if not final_paths:
             if self._parallel_phase_failures:
                 detail_lines = [
@@ -398,7 +404,7 @@ class FFmpegWorker(QThread):
         output_paths = combat_audio.resolve_output_path(
             replace(config, mix_enabled=mix_effective),
             audio_count=len(final_paths),
-            audio_filenames=audio_files,
+            audio_filenames=final_audio_filenames,
         )
         if config.boxed and not is_audio:
             phase_idx += 1
