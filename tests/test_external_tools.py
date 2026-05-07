@@ -12,14 +12,26 @@ def test_resolve_mkvmerge_path_prefers_valid_manual_path(monkeypatch, tmp_path):
     assert resolve_mkvmerge_path(str(tool)) == str(tool)
 
 
-def test_resolve_mkvmerge_path_falls_back_to_path_when_manual_invalid(monkeypatch):
-    monkeypatch.setattr("src.core.external_tools.shutil.which", lambda name: "/usr/bin/mkvmerge")
+def test_resolve_mkvmerge_path_falls_back_to_path_when_manual_invalid(monkeypatch, tmp_path):
+    tool = tmp_path / "mkvmerge"
+    tool.write_text("#!/bin/sh\n", encoding="utf-8")
+    tool.chmod(0o755)
+    monkeypatch.setattr("src.core.external_tools.shutil.which", lambda name: str(tool))
 
-    assert resolve_mkvmerge_path("/missing/mkvmerge") == "/usr/bin/mkvmerge"
+    assert resolve_mkvmerge_path("/missing/mkvmerge") == str(tool)
 
 
 def test_resolve_mkvmerge_path_returns_none_when_not_found(monkeypatch):
     monkeypatch.setattr("src.core.external_tools.shutil.which", lambda name: None)
+
+    assert resolve_mkvmerge_path(None) is None
+
+
+def test_resolve_mkvmerge_path_ignores_non_executable_path_result(monkeypatch, tmp_path):
+    tool = tmp_path / "mkvmerge"
+    tool.write_text("", encoding="utf-8")
+    tool.chmod(0o644)
+    monkeypatch.setattr("src.core.external_tools.shutil.which", lambda name: str(tool))
 
     assert resolve_mkvmerge_path(None) is None
 

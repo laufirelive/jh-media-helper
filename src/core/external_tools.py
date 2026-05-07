@@ -16,7 +16,11 @@ def resolve_mkvmerge_path(manual_path: str | None = None) -> str | None:
     if _is_executable_file(manual_path):
         return manual_path
 
-    return shutil.which("mkvmerge")
+    detected = shutil.which("mkvmerge")
+    if _is_executable_file(detected):
+        return detected
+
+    return None
 
 
 def resolve_mux_backend(
