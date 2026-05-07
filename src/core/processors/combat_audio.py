@@ -373,7 +373,7 @@ def resolve_mkv_output_paths(config: CombatAudioConfig, timestamp=None) -> list[
 
     paths = []
     for i in range(len(secondary_video_paths) + 1):
-        paths.append(os.path.join(output_dir, f"{input_stem}_part{i + 1}_{ts}.mkv"))
+        paths.append(os.path.join(output_dir, f"{input_stem}_{ts}-part{i + 1}.mkv"))
     return paths
 
 

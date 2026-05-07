@@ -640,9 +640,9 @@ class TestResolveMkvOutputPaths:
             paths = resolve_mkv_output_paths(cfg, timestamp="20260507190000")
 
             assert paths == [
-                os.path.join(output_dir, "episode_01_part1_20260507190000.mkv"),
-                os.path.join(output_dir, "episode_01_part2_20260507190000.mkv"),
-                os.path.join(output_dir, "episode_01_part3_20260507190000.mkv"),
+                os.path.join(output_dir, "episode_01_20260507190000-part1.mkv"),
+                os.path.join(output_dir, "episode_01_20260507190000-part2.mkv"),
+                os.path.join(output_dir, "episode_01_20260507190000-part3.mkv"),
             ]
 
 
