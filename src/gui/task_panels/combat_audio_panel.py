@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QDoubleSpinBox,
+    QFileDialog,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -54,6 +55,9 @@ class CombatAudioPanel(BaseTaskPanel):
         self._preview_start_ms = 0
         self._preview_temp_dir: str | None = None
         self._preview_cache = preview_cache
+        self._secondary_video_paths: list[str] = []
+        self._mkvmerge_path: str | None = None
+        self._mux_backend = "auto"
         super().__init__(parent, init_layout=False)
         self._init_custom_layout()
 
@@ -129,6 +133,8 @@ class CombatAudioPanel(BaseTaskPanel):
         self._audio_dir_selector.path_changed.connect(self._on_audio_dir_changed)
         left.addWidget(self._audio_dir_selector)
 
+        self._build_secondary_video_group(left)
+
         self._info_group = QGroupBox("文件信息")
         info_layout = QVBoxLayout(self._info_group)
         self._info_label = QLabel("未选择文件")
@@ -183,6 +189,7 @@ class CombatAudioPanel(BaseTaskPanel):
         out_layout.setSpacing(12)
 
         self._boxed_checkbox = QCheckBox("封装为 MKV")
+        self._boxed_checkbox.toggled.connect(self._update_param_states)
         out_layout.addWidget(self._boxed_checkbox)
 
         self._output_selector = FileSelector(
@@ -195,6 +202,34 @@ class CombatAudioPanel(BaseTaskPanel):
         right.addWidget(out_group)
         right.addStretch()
         parent_layout.addLayout(right, 1)
+
+    def _build_secondary_video_group(self, parent_layout: QVBoxLayout) -> None:
+        self._secondary_group = QGroupBox("副视频（仅封装 MKV 时可用）")
+        self._secondary_group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        group_layout = QVBoxLayout(self._secondary_group)
+        group_layout.setSpacing(6)
+
+        self._secondary_list_widget = QWidget()
+        self._secondary_list_layout = QVBoxLayout(self._secondary_list_widget)
+        self._secondary_list_layout.setContentsMargins(0, 0, 0, 0)
+        self._secondary_list_layout.setSpacing(4)
+        group_layout.addWidget(self._secondary_list_widget)
+
+        button_row = QHBoxLayout()
+        button_row.setSpacing(6)
+        self._add_secondary_btn = QPushButton("添加副视频")
+        self._add_secondary_btn.clicked.connect(self._add_secondary_video)
+        button_row.addWidget(self._add_secondary_btn)
+
+        self._clear_secondary_btn = QPushButton("清空")
+        self._clear_secondary_btn.clicked.connect(self._clear_secondary_videos)
+        button_row.addWidget(self._clear_secondary_btn)
+        button_row.addStretch()
+        group_layout.addLayout(button_row)
+
+        parent_layout.addWidget(self._secondary_group)
+        self._refresh_secondary_videos()
+        self._secondary_group.setEnabled(False)
 
     # --- Middle zone ---
 
@@ -368,6 +403,8 @@ class CombatAudioPanel(BaseTaskPanel):
         if is_audio:
             self._boxed_checkbox.setChecked(False)
 
+        self._secondary_group.setEnabled((not is_audio) and self._boxed_checkbox.isChecked())
+
     def _emit_preview_state(self):
         self.preview_enabled_changed.emit(self.get_preview_btn_enabled())
 
@@ -523,6 +560,83 @@ class CombatAudioPanel(BaseTaskPanel):
 
         self._bg_files = reordered
         self._refresh_bg_table()
+
+    def _add_secondary_video(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "选择副视频", "", _MEDIA_FILTER)
+        if not path:
+            return
+        self._secondary_video_paths.append(path)
+        self._refresh_secondary_videos()
+
+    def _clear_secondary_videos(self) -> None:
+        self._secondary_video_paths.clear()
+        self._refresh_secondary_videos()
+
+    def _move_secondary_video(self, index: int, delta: int) -> None:
+        new_index = index + delta
+        if index < 0 or index >= len(self._secondary_video_paths):
+            return
+        if new_index < 0 or new_index >= len(self._secondary_video_paths):
+            return
+
+        self._secondary_video_paths[index], self._secondary_video_paths[new_index] = (
+            self._secondary_video_paths[new_index],
+            self._secondary_video_paths[index],
+        )
+        self._refresh_secondary_videos()
+
+    def _remove_secondary_video(self, index: int) -> None:
+        if index < 0 or index >= len(self._secondary_video_paths):
+            return
+        del self._secondary_video_paths[index]
+        self._refresh_secondary_videos()
+
+    def _refresh_secondary_videos(self) -> None:
+        while self._secondary_list_layout.count():
+            item = self._secondary_list_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        if not self._secondary_video_paths:
+            empty_label = QLabel("未添加副视频")
+            empty_label.setStyleSheet("color: gray;")
+            self._secondary_list_layout.addWidget(empty_label)
+            return
+
+        for index, path in enumerate(self._secondary_video_paths):
+            row_widget = QWidget()
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(4)
+
+            idx_label = QLabel(f"{index + 1:02d}")
+            idx_label.setFixedWidth(24)
+            idx_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            row_layout.addWidget(idx_label)
+
+            name_label = QLabel(os.path.basename(path) or path)
+            name_label.setToolTip(path)
+            row_layout.addWidget(name_label, 1)
+
+            up_btn = QPushButton("↑")
+            up_btn.setFixedWidth(28)
+            up_btn.setEnabled(index > 0)
+            up_btn.clicked.connect(lambda checked=False, i=index: self._move_secondary_video(i, -1))
+            row_layout.addWidget(up_btn)
+
+            down_btn = QPushButton("↓")
+            down_btn.setFixedWidth(28)
+            down_btn.setEnabled(index < len(self._secondary_video_paths) - 1)
+            down_btn.clicked.connect(lambda checked=False, i=index: self._move_secondary_video(i, 1))
+            row_layout.addWidget(down_btn)
+
+            remove_btn = QPushButton("移除")
+            remove_btn.setFixedWidth(48)
+            remove_btn.clicked.connect(lambda checked=False, i=index: self._remove_secondary_video(i))
+            row_layout.addWidget(remove_btn)
+
+            self._secondary_list_layout.addWidget(row_widget)
 
     # --- Preview mix ---
 
@@ -751,6 +865,10 @@ class CombatAudioPanel(BaseTaskPanel):
     def get_task_type(self) -> TaskType:
         return TaskType.COMBAT_AUDIO
 
+    def set_mux_settings(self, *, mkvmerge_path: str | None, mux_backend: str = "auto") -> None:
+        self._mkvmerge_path = mkvmerge_path
+        self._mux_backend = mux_backend
+
     def _build_combat_config(self) -> CombatAudioConfig | None:
         input_path = self._input_selector.path()
         audio_dir = self._audio_dir_selector.path()
@@ -769,16 +887,22 @@ class CombatAudioPanel(BaseTaskPanel):
         if not self._is_pure_audio and len(self._input_streams) == 0:
             mix_on = False
 
+        boxed = self._boxed_checkbox.isChecked()
+        secondary_video_paths = list(self._secondary_video_paths) if boxed and not self._is_pure_audio else []
+
         return CombatAudioConfig(
             input_path=input_path,
             audio_dir=audio_dir,
             output_dir=self._output_selector.path() or None,
             mix_enabled=mix_on,
             volume=self._volume_spin.value(),
-            boxed=self._boxed_checkbox.isChecked(),
+            boxed=boxed,
             thread_count=self._thread_spin.value(),
             audio_stream_index=selected_track,
             audio_order=audio_order,
+            secondary_video_paths=secondary_video_paths,
+            mkvmerge_path=self._mkvmerge_path,
+            mux_backend=self._mux_backend,
         )
 
     def _cleanup_preview_temp(self):

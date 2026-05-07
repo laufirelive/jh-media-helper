@@ -213,3 +213,100 @@ def test_tracks_table_shows_language_tag_or_und(panel):
     assert panel._tracks_table.horizontalHeaderItem(5).text() == "语言"
     assert panel._tracks_table.item(0, 5).text() == "jpn"
     assert panel._tracks_table.item(1, 5).text() == "und"
+
+
+def test_secondary_group_enabled_only_for_boxed_video_input(panel):
+    panel._is_pure_audio = False
+    panel._boxed_checkbox.setChecked(False)
+    panel._update_param_states()
+
+    assert not panel._secondary_group.isEnabled()
+
+    panel._boxed_checkbox.setChecked(True)
+    panel._update_param_states()
+
+    assert panel._secondary_group.isEnabled()
+
+    panel._is_pure_audio = True
+    panel._update_param_states()
+
+    assert not panel._secondary_group.isEnabled()
+    assert not panel._boxed_checkbox.isChecked()
+
+
+def test_secondary_video_order_is_written_to_config_in_current_order(panel):
+    panel._input_selector._edit.setText("/video/main.mkv")
+    panel._audio_dir_selector._edit.setText("/audio")
+    panel._is_pure_audio = False
+    panel._boxed_checkbox.setChecked(True)
+    panel._secondary_video_paths = [
+        "/video/part2.mkv",
+        "/video/part3.mkv",
+    ]
+
+    config = panel.build_config()
+
+    assert config.secondary_video_paths == [
+        "/video/part2.mkv",
+        "/video/part3.mkv",
+    ]
+
+
+def test_secondary_video_config_clears_when_not_boxed_or_pure_audio(panel):
+    panel._input_selector._edit.setText("/video/main.mkv")
+    panel._audio_dir_selector._edit.setText("/audio")
+    panel._secondary_video_paths = ["/video/part2.mkv"]
+
+    panel._is_pure_audio = False
+    panel._boxed_checkbox.setChecked(False)
+
+    assert panel.build_config().secondary_video_paths == []
+
+    panel._is_pure_audio = True
+    panel._boxed_checkbox.setChecked(True)
+    panel._update_param_states()
+
+    assert panel.build_config().secondary_video_paths == []
+
+
+def test_set_mux_settings_values_are_included_in_config(panel):
+    panel._input_selector._edit.setText("/video/main.mkv")
+    panel._audio_dir_selector._edit.setText("/audio")
+
+    panel.set_mux_settings(mkvmerge_path="/opt/bin/mkvmerge", mux_backend="mkvmerge")
+
+    config = panel.build_config()
+
+    assert config.mkvmerge_path == "/opt/bin/mkvmerge"
+    assert config.mux_backend == "mkvmerge"
+
+
+def test_secondary_video_move_remove_and_clear_helpers_update_list(panel):
+    panel._secondary_video_paths = [
+        "/video/part1.mkv",
+        "/video/part2.mkv",
+        "/video/part3.mkv",
+    ]
+
+    panel._move_secondary_video(2, -1)
+    assert panel._secondary_video_paths == [
+        "/video/part1.mkv",
+        "/video/part3.mkv",
+        "/video/part2.mkv",
+    ]
+
+    panel._move_secondary_video(0, -1)
+    assert panel._secondary_video_paths == [
+        "/video/part1.mkv",
+        "/video/part3.mkv",
+        "/video/part2.mkv",
+    ]
+
+    panel._remove_secondary_video(1)
+    assert panel._secondary_video_paths == [
+        "/video/part1.mkv",
+        "/video/part2.mkv",
+    ]
+
+    panel._clear_secondary_videos()
+    assert panel._secondary_video_paths == []

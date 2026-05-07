@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
 )
 
 from src.core.config import TaskType
+from src.core.app_settings import load_settings
 from src.core.data_dir import get_queue_path
 from src.core.encoder_registry import EncoderRegistry
 from src.core.preview_cache import PreviewCacheSession
@@ -123,6 +124,14 @@ class MainWindow(QMainWindow):
             return widget
         return None
 
+    @staticmethod
+    def _apply_runtime_settings(panel: BaseTaskPanel) -> None:
+        if isinstance(panel, CombatAudioPanel):
+            panel.set_mux_settings(
+                mkvmerge_path=load_settings().mkvmerge_path,
+                mux_backend="auto",
+            )
+
     def _update_queue_badge(self, count: int):
         idx = self._tabs.indexOf(self._queue_tab)
         self._tabs.setTabText(idx, f"批量队列 ({count})")
@@ -141,6 +150,7 @@ class MainWindow(QMainWindow):
         panel = self._get_active_panel()
         if panel is None:
             return
+        self._apply_runtime_settings(panel)
         ok, count, err = panel.validate()
         if not ok:
             QMessageBox.warning(self, "校验失败", err)
@@ -202,6 +212,7 @@ class MainWindow(QMainWindow):
         panel = self._get_active_panel()
         if panel is None:
             return
+        self._apply_runtime_settings(panel)
         ok, count, err = panel.validate()
         if not ok:
             QMessageBox.warning(self, "校验失败", err)
