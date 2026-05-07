@@ -344,7 +344,46 @@ def validate(config: CombatAudioConfig) -> tuple[bool, str | None]:
     return True, None
 
 
-def resolve_output_path(config: CombatAudioConfig, audio_count: int) -> list[str]:
+def sanitize_output_stem(filename: str, max_length=80) -> str:
+    """Create a safe output filename stem from a source filename."""
+    basename = os.path.basename(filename)
+    basename_stem, basename_ext = os.path.splitext(basename)
+    stem = basename_stem if basename_ext else os.path.splitext(filename)[0]
+
+    for char in '/\\:*?"<>|':
+        stem = stem.replace(char, "_")
+
+    stem = " ".join(stem.split()).strip(" ._")
+    if not stem:
+        return "audio"
+
+    stem = stem[:max_length].strip(" ._")
+    return stem or "audio"
+
+
+def resolve_mkv_output_paths(config: CombatAudioConfig, timestamp=None) -> list[str]:
+    """Resolve boxed MKV output paths for the main and secondary videos."""
+    input_stem = os.path.splitext(os.path.basename(config.input_path))[0]
+    output_dir = config.output_dir or os.path.dirname(config.input_path)
+    ts = timestamp or time.strftime("%Y%m%d%H%M%S")
+    secondary_video_paths = config.secondary_video_paths or []
+
+    if not secondary_video_paths:
+        return [os.path.join(output_dir, f"{input_stem}_{ts}.mkv")]
+
+    paths = []
+    for i in range(len(secondary_video_paths) + 1):
+        paths.append(os.path.join(output_dir, f"{input_stem}_part{i + 1}_{ts}.mkv"))
+    return paths
+
+
+def resolve_output_path(
+    config: CombatAudioConfig,
+    audio_count: int,
+    *,
+    audio_filenames=None,
+    timestamp=None,
+) -> list[str]:
     """Resolve output file paths based on config."""
     input_stem = os.path.splitext(os.path.basename(config.input_path))[0]
 
@@ -354,15 +393,17 @@ def resolve_output_path(config: CombatAudioConfig, audio_count: int) -> list[str
         output_dir = os.path.dirname(config.input_path)
 
     if config.boxed:
-        ts = time.strftime("%Y%m%d%H%M%S")
-        return [os.path.join(output_dir, f"{input_stem}_{ts}.mkv")]
+        return resolve_mkv_output_paths(config, timestamp=timestamp)
 
     suffix = "mixed" if config.mix_enabled else "aligned"
-    ts = time.strftime("%Y%m%d%H%M%S")
+    ts = timestamp or time.strftime("%Y%m%d%H%M%S")
     output_dir = os.path.join(output_dir, f"{input_stem}_{suffix}_{ts}")
     paths = []
     for i in range(audio_count):
-        filename = f"{input_stem}_{suffix}_{i:02d}.aac"
+        if audio_filenames is None:
+            filename = f"{input_stem}_{suffix}_{i:02d}.aac"
+        else:
+            filename = f"{i + 1:02d}_{sanitize_output_stem(audio_filenames[i])}_{suffix}.aac"
         paths.append(os.path.join(output_dir, filename))
 
     return paths

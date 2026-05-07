@@ -21,7 +21,9 @@ from src.core.processors.combat_audio import (
     is_pure_audio,
     probe_audio_streams,
     probe_duration,
+    resolve_mkv_output_paths,
     resolve_output_path,
+    sanitize_output_stem,
     scan_audio_dir,
     validate,
 )
@@ -564,6 +566,84 @@ class TestValidate:
             cfg = CombatAudioConfig(input_path=video_path, audio_dir=audio_dir, audio_order=[])
             ok, err = validate(cfg)
             assert ok is True
+
+
+class TestSanitizeOutputStem:
+    def test_replaces_cross_platform_illegal_characters(self):
+        assert sanitize_output_stem('a/b\\c:d*e?f"g<h>i|j') == "a_b_c_d_e_f_g_h_i_j"
+
+    def test_uses_audio_for_empty_result(self):
+        assert sanitize_output_stem("////") == "audio"
+
+    def test_strips_extension_and_compresses_spaces(self):
+        assert sanitize_output_stem("  my   song .mp3") == "my song"
+
+
+class TestNamedAudioOutputPaths:
+    def test_non_boxed_outputs_include_original_background_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            video_path = os.path.join(d, "episode_01.mkv")
+            output_dir = os.path.join(d, "output")
+            cfg = CombatAudioConfig(
+                input_path=video_path,
+                audio_dir="/audio",
+                output_dir=output_dir,
+                mix_enabled=True,
+                boxed=False,
+            )
+
+            paths = resolve_output_path(
+                cfg,
+                2,
+                audio_filenames=["bg one.mp3", "bad/name.aac"],
+                timestamp="20260507190000",
+            )
+
+            batch_dir = os.path.join(output_dir, "episode_01_mixed_20260507190000")
+            assert paths == [
+                os.path.join(batch_dir, "01_bg one_mixed.aac"),
+                os.path.join(batch_dir, "02_name_mixed.aac"),
+            ]
+
+
+class TestResolveMkvOutputPaths:
+    def test_single_mkv_keeps_existing_name_when_no_secondary_videos(self):
+        with tempfile.TemporaryDirectory() as d:
+            video_path = os.path.join(d, "episode_01.mkv")
+            output_dir = os.path.join(d, "output")
+            cfg = CombatAudioConfig(
+                input_path=video_path,
+                audio_dir="/audio",
+                output_dir=output_dir,
+                boxed=True,
+            )
+
+            paths = resolve_mkv_output_paths(cfg, timestamp="20260507190000")
+
+            assert paths == [os.path.join(output_dir, "episode_01_20260507190000.mkv")]
+
+    def test_secondary_videos_use_part_suffixes_and_same_timestamp(self):
+        with tempfile.TemporaryDirectory() as d:
+            video_path = os.path.join(d, "episode_01.mkv")
+            output_dir = os.path.join(d, "output")
+            cfg = CombatAudioConfig(
+                input_path=video_path,
+                audio_dir="/audio",
+                output_dir=output_dir,
+                boxed=True,
+                secondary_video_paths=[
+                    os.path.join(d, "episode_01_part2.mkv"),
+                    os.path.join(d, "episode_01_part3.mkv"),
+                ],
+            )
+
+            paths = resolve_mkv_output_paths(cfg, timestamp="20260507190000")
+
+            assert paths == [
+                os.path.join(output_dir, "episode_01_part1_20260507190000.mkv"),
+                os.path.join(output_dir, "episode_01_part2_20260507190000.mkv"),
+                os.path.join(output_dir, "episode_01_part3_20260507190000.mkv"),
+            ]
 
 
 class TestResolveOutputPath:
