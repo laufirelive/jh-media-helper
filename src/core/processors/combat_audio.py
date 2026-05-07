@@ -296,7 +296,9 @@ def build_mkvmerge_mux_command(
         "--no-chapters",
     ]
 
-    if not keep_original_audio:
+    if keep_original_audio:
+        cmd += ["--default-track-flag", "-1:no"]
+    else:
         cmd += ["--no-audio"]
     cmd += [video_path]
 
@@ -306,7 +308,7 @@ def build_mkvmerge_mux_command(
             "--no-subtitles",
             "--no-chapters",
             "--no-global-tags",
-            "--default-track",
+            "--default-track-flag",
             "0:yes" if index == 0 else "0:no",
             audio_path,
         ]

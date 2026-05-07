@@ -392,22 +392,26 @@ class TestBuildMkvmergeMuxCommand:
             "/output/final.mkv",
             "--no-global-tags",
             "--no-chapters",
+            "--default-track-flag",
+        ]
+        assert cmd[6:8] == [
+            "-1:no",
             "/video/input.mkv",
         ]
-        assert "--no-audio" not in cmd[:6]
-        assert cmd[6:] == [
+        assert "--no-audio" not in cmd[:8]
+        assert cmd[8:] == [
             "--no-video",
             "--no-subtitles",
             "--no-chapters",
             "--no-global-tags",
-            "--default-track",
+            "--default-track-flag",
             "0:yes",
             "/audio/m1.aac",
             "--no-video",
             "--no-subtitles",
             "--no-chapters",
             "--no-global-tags",
-            "--default-track",
+            "--default-track-flag",
             "0:no",
             "/audio/m2.aac",
         ]
@@ -439,7 +443,11 @@ class TestBuildMkvmergeMuxCommand:
             "/output/final.mkv",
         )
 
-        default_track_indices = [i for i, value in enumerate(cmd) if value == "--default-track"]
+        default_track_indices = [
+            i
+            for i, value in enumerate(cmd)
+            if value == "--default-track-flag" and cmd[i + 1].startswith("0:")
+        ]
         assert [cmd[i + 1] for i in default_track_indices] == ["0:yes", "0:no", "0:no"]
         assert default_track_indices[0] < cmd.index("/audio/m1.aac")
         assert default_track_indices[1] < cmd.index("/audio/m2.aac")
