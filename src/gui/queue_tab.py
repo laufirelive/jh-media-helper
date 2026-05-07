@@ -435,8 +435,11 @@ class QueueTab(QWidget):
                 self._refresh_table()
                 self._run_next()
                 return
-            audio_files = cfg.audio_order or [f.filename for f in combat_audio.scan_audio_dir(cfg.audio_dir)]
-            count = len(audio_files)
+            if cfg.boxed and cfg.secondary_video_paths:
+                count = 1 + len(cfg.secondary_video_paths)
+            else:
+                audio_files = cfg.audio_order or [f.filename for f in combat_audio.scan_audio_dir(cfg.audio_dir)]
+                count = len(audio_files)
 
         self._worker = FFmpegWorker(
             task_type=task.task_type,

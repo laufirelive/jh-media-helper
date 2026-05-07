@@ -860,6 +860,8 @@ class CombatAudioPanel(BaseTaskPanel):
         if not ok:
             return False, 0, err
         audio_count = len(self._bg_files) if self._bg_files else len(combat_audio.scan_audio_dir(audio_dir))
+        if config.boxed and not self._is_pure_audio:
+            return True, 1 + len(config.secondary_video_paths or []), None
         return True, audio_count, None
 
     def build_config(self) -> CombatAudioConfig | None:

@@ -360,3 +360,88 @@ def test_secondary_video_move_remove_and_clear_helpers_update_list(panel):
 
     panel._clear_secondary_videos()
     assert panel._secondary_video_paths == []
+
+
+def test_validate_boxed_video_reports_missing_secondary_video(panel, tmp_path, monkeypatch):
+    input_path = tmp_path / "main.mkv"
+    input_path.write_bytes(b"")
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir()
+    audio_path = audio_dir / "song.aac"
+    audio_path.write_bytes(b"")
+    missing_secondary = tmp_path / "missing-secondary.mkv"
+
+    panel._input_selector._edit.setText(str(input_path))
+    panel._audio_dir_selector._edit.setText(str(audio_dir))
+    panel._is_pure_audio = False
+    panel._boxed_checkbox.setChecked(True)
+    panel._secondary_video_paths = [str(missing_secondary)]
+    panel._bg_files = [type("Bg", (), {"path": str(audio_path), "filename": "song.aac", "duration": 0.0})()]
+    original_is_pure_audio = combat_audio_panel.combat_audio.is_pure_audio
+    monkeypatch.setattr(
+        combat_audio_panel.combat_audio,
+        "is_pure_audio",
+        lambda path: original_is_pure_audio(path) and path != str(input_path),
+    )
+
+    ok, count, err = panel.validate()
+
+    assert not ok
+    assert count == 0
+    assert err == f"副视频不存在: {missing_secondary}"
+
+
+def test_validate_boxed_video_counts_mkv_outputs(panel, tmp_path, monkeypatch):
+    input_path = tmp_path / "main.mkv"
+    input_path.write_bytes(b"")
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir()
+    audio_path = audio_dir / "song.aac"
+    audio_path.write_bytes(b"")
+    secondaries = [tmp_path / "secondary-1.mkv", tmp_path / "secondary-2.mkv"]
+    for path in secondaries:
+        path.write_bytes(b"")
+
+    panel._input_selector._edit.setText(str(input_path))
+    panel._audio_dir_selector._edit.setText(str(audio_dir))
+    panel._is_pure_audio = False
+    panel._boxed_checkbox.setChecked(True)
+    panel._secondary_video_paths = [str(path) for path in secondaries]
+    panel._bg_files = [type("Bg", (), {"path": str(audio_path), "filename": "song.aac", "duration": 0.0})()]
+    original_is_pure_audio = combat_audio_panel.combat_audio.is_pure_audio
+    monkeypatch.setattr(
+        combat_audio_panel.combat_audio,
+        "is_pure_audio",
+        lambda path: original_is_pure_audio(path) and path != str(input_path),
+    )
+
+    ok, count, err = panel.validate()
+
+    assert ok
+    assert count == 3
+    assert err is None
+
+
+def test_validate_non_boxed_uses_audio_count(panel, tmp_path):
+    input_path = tmp_path / "main.mkv"
+    input_path.write_bytes(b"")
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir()
+    audio_paths = [audio_dir / "song-1.aac", audio_dir / "song-2.aac"]
+    for path in audio_paths:
+        path.write_bytes(b"")
+
+    panel._input_selector._edit.setText(str(input_path))
+    panel._audio_dir_selector._edit.setText(str(audio_dir))
+    panel._is_pure_audio = False
+    panel._boxed_checkbox.setChecked(False)
+    panel._bg_files = [
+        type("Bg", (), {"path": str(path), "filename": path.name, "duration": 0.0})()
+        for path in audio_paths
+    ]
+
+    ok, count, err = panel.validate()
+
+    assert ok
+    assert count == 2
+    assert err is None
