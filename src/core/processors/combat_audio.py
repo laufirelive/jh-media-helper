@@ -399,10 +399,10 @@ def resolve_output_path(
     output_dir = os.path.join(output_dir, f"{input_stem}_{suffix}_{ts}")
     paths = []
     for i in range(audio_count):
-        if audio_filenames is None:
-            filename = f"{input_stem}_{suffix}_{i:02d}.aac"
-        else:
+        if audio_filenames is not None and i < len(audio_filenames):
             filename = f"{i + 1:02d}_{sanitize_output_stem(audio_filenames[i])}_{suffix}.aac"
+        else:
+            filename = f"{input_stem}_{suffix}_{i:02d}.aac"
         paths.append(os.path.join(output_dir, filename))
 
     return paths

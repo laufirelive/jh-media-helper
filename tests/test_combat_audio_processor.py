@@ -608,6 +608,32 @@ class TestNamedAudioOutputPaths:
                 os.path.join(batch_dir, "02_name_mixed.aac"),
             ]
 
+    def test_partial_audio_filenames_falls_back_for_unnamed_outputs(self):
+        with tempfile.TemporaryDirectory() as d:
+            video_path = os.path.join(d, "episode_01.mkv")
+            output_dir = os.path.join(d, "output")
+            cfg = CombatAudioConfig(
+                input_path=video_path,
+                audio_dir="/audio",
+                output_dir=output_dir,
+                mix_enabled=False,
+                boxed=False,
+            )
+
+            paths = resolve_output_path(
+                cfg,
+                3,
+                audio_filenames=["bg one.mp3"],
+                timestamp="20260507190000",
+            )
+
+            batch_dir = os.path.join(output_dir, "episode_01_aligned_20260507190000")
+            assert paths == [
+                os.path.join(batch_dir, "01_bg one_aligned.aac"),
+                os.path.join(batch_dir, "episode_01_aligned_01.aac"),
+                os.path.join(batch_dir, "episode_01_aligned_02.aac"),
+            ]
+
 
 class TestResolveMkvOutputPaths:
     def test_single_mkv_keeps_existing_name_when_no_secondary_videos(self):
