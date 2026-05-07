@@ -134,6 +134,33 @@ def probe_audio_streams(file_path: str) -> list[AudioStreamInfo]:
         return []
 
 
+def probe_video_stream_count(file_path: str) -> int:
+    """Probe video stream count using ffprobe. Returns 0 on failure."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "quiet",
+                "-print_format", "json",
+                "-select_streams", "v",
+                "-show_entries", "stream=index",
+                file_path,
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        data = json.loads(result.stdout)
+        return len(data.get("streams", []))
+    except Exception:
+        return 0
+
+
+def has_video_stream(file_path: str) -> bool:
+    """Return whether the file contains at least one video stream."""
+    return probe_video_stream_count(file_path) > 0
+
+
 def run_ffmpeg_command(cmd: list[str], *, timeout: int, default_message: str) -> str | None:
     """Run ffmpeg command and return a user-facing error message on failure."""
     try:
@@ -269,12 +296,60 @@ def build_mux_command(
     ]
 
     if mixed_audios:
-        cmd += ["-disposition:a:0", "default"]
-        total_audio_tracks = len(mixed_audios) + (1 if keep_original_audio else 0)
-        for audio_index in range(1, total_audio_tracks):
-            cmd += [f"-disposition:a:{audio_index}", "0"]
+        cmd += [
+            "-disposition:a", "0",
+            "-disposition:a:0", "default",
+        ]
 
     cmd += [output_path]
+
+    return cmd
+
+
+def build_mkvmerge_mux_command(
+    mkvmerge_path: str,
+    video_path: str,
+    final_audios: list[str],
+    output_path: str,
+    *,
+    keep_original_audio: bool = True,
+) -> list[str]:
+    """Build mkvmerge command to mux video with final audio tracks."""
+    cmd = [
+        mkvmerge_path,
+        "-o",
+        output_path,
+        "--disable-track-statistics-tags",
+        "--no-audio",
+        "--no-chapters",
+        "--no-global-tags",
+        "--no-track-tags",
+        video_path,
+    ]
+
+    for index, audio_path in enumerate(final_audios):
+        cmd += [
+            "--no-video",
+            "--no-subtitles",
+            "--no-chapters",
+            "--no-global-tags",
+            "--no-track-tags",
+            "--default-track-flag",
+            "0:yes" if index == 0 else "0:no",
+            audio_path,
+        ]
+
+    if keep_original_audio:
+        cmd += [
+            "--no-video",
+            "--no-subtitles",
+            "--no-chapters",
+            "--no-global-tags",
+            "--no-track-tags",
+            "--default-track-flag",
+            "-1:no",
+            video_path,
+        ]
 
     return cmd
 
@@ -341,10 +416,65 @@ def validate(config: CombatAudioConfig) -> tuple[bool, str | None]:
     if not audio_files:
         return False, f"音频文件夹为空: {config.audio_dir}"
 
+    is_audio = is_pure_audio(config.input_path)
+    return validate_secondary_videos(config, is_audio=is_audio)
+
+
+def validate_secondary_videos(config: CombatAudioConfig, *, is_audio: bool) -> tuple[bool, str | None]:
+    """Validate secondary videos for boxed video output."""
+    if is_audio or not config.boxed:
+        return True, None
+
+    for path in config.secondary_video_paths or []:
+        if not os.path.exists(path):
+            return False, f"副视频不存在: {path}"
+        if is_pure_audio(path):
+            return False, f"副视频不是视频文件: {path}"
+        if not has_video_stream(path):
+            return False, f"副视频不是视频文件: {path}"
+
     return True, None
 
 
-def resolve_output_path(config: CombatAudioConfig, audio_count: int) -> list[str]:
+def sanitize_output_stem(filename: str, max_length=80) -> str:
+    """Create a safe output filename stem from a source filename."""
+    basename = os.path.basename(filename)
+    stem = os.path.splitext(basename)[0]
+
+    for char in '/\\:*?"<>|':
+        stem = stem.replace(char, "_")
+
+    stem = " ".join(stem.split()).strip(" ._")
+    if not stem:
+        return "audio"
+
+    stem = stem[:max_length].strip(" ._")
+    return stem or "audio"
+
+
+def resolve_mkv_output_paths(config: CombatAudioConfig, timestamp=None) -> list[str]:
+    """Resolve boxed MKV output paths for the main and secondary videos."""
+    input_stem = os.path.splitext(os.path.basename(config.input_path))[0]
+    output_dir = config.output_dir or os.path.dirname(config.input_path)
+    ts = timestamp or time.strftime("%Y%m%d%H%M%S")
+    secondary_video_paths = config.secondary_video_paths or []
+
+    if not secondary_video_paths:
+        return [os.path.join(output_dir, f"{input_stem}_{ts}.mkv")]
+
+    paths = []
+    for i in range(len(secondary_video_paths) + 1):
+        paths.append(os.path.join(output_dir, f"{input_stem}_{ts}-part{i + 1}.mkv"))
+    return paths
+
+
+def resolve_output_path(
+    config: CombatAudioConfig,
+    audio_count: int,
+    *,
+    audio_filenames=None,
+    timestamp=None,
+) -> list[str]:
     """Resolve output file paths based on config."""
     input_stem = os.path.splitext(os.path.basename(config.input_path))[0]
 
@@ -354,15 +484,17 @@ def resolve_output_path(config: CombatAudioConfig, audio_count: int) -> list[str
         output_dir = os.path.dirname(config.input_path)
 
     if config.boxed:
-        ts = time.strftime("%Y%m%d%H%M%S")
-        return [os.path.join(output_dir, f"{input_stem}_{ts}.mkv")]
+        return resolve_mkv_output_paths(config, timestamp=timestamp)
 
     suffix = "mixed" if config.mix_enabled else "aligned"
-    ts = time.strftime("%Y%m%d%H%M%S")
+    ts = timestamp or time.strftime("%Y%m%d%H%M%S")
     output_dir = os.path.join(output_dir, f"{input_stem}_{suffix}_{ts}")
     paths = []
     for i in range(audio_count):
-        filename = f"{input_stem}_{suffix}_{i:02d}.aac"
+        if audio_filenames is not None and i < len(audio_filenames):
+            filename = f"{i + 1:02d}_{sanitize_output_stem(audio_filenames[i])}_{suffix}.aac"
+        else:
+            filename = f"{input_stem}_{suffix}_{i:02d}.aac"
         paths.append(os.path.join(output_dir, filename))
 
     return paths

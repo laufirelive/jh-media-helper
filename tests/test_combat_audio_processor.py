@@ -14,6 +14,7 @@ from src.core.processors.combat_audio import (
     build_duration_adjust_command,
     build_export_aac_command,
     build_extract_command,
+    build_mkvmerge_mux_command,
     build_mix_command,
     build_mux_command,
     build_preview_command,
@@ -21,9 +22,13 @@ from src.core.processors.combat_audio import (
     is_pure_audio,
     probe_audio_streams,
     probe_duration,
+    probe_video_stream_count,
+    resolve_mkv_output_paths,
     resolve_output_path,
+    sanitize_output_stem,
     scan_audio_dir,
     validate,
+    validate_secondary_videos,
 )
 
 
@@ -211,6 +216,30 @@ class TestProbeAudioStreams:
         assert streams == []
 
 
+class TestProbeVideoStreamCount:
+    @patch("subprocess.run")
+    def test_parses_ffprobe_output(self, mock_run):
+        mock_run.return_value.stdout = json.dumps({
+            "streams": [
+                {"index": 0},
+                {"index": 3},
+            ]
+        })
+        mock_run.return_value.returncode = 0
+
+        count = probe_video_stream_count("/path/to/video.mkv")
+
+        assert count == 2
+
+    @patch("subprocess.run")
+    def test_returns_zero_on_failure(self, mock_run):
+        mock_run.side_effect = FileNotFoundError()
+
+        count = probe_video_stream_count("/path/to/missing.mkv")
+
+        assert count == 0
+
+
 class TestBuildExtractCommand:
     def test_command_structure(self):
         cmd = build_extract_command("/input/video.mkv", 0, "/output/audio.aac")
@@ -373,6 +402,168 @@ class TestBuildMuxCommand:
         assert "-avoid_negative_ts" in cmd
         assert cmd[cmd.index("-avoid_negative_ts") + 1] == "make_zero"
 
+    def test_clears_all_audio_dispositions_and_sets_first_generated_audio_default(self):
+        cmd = build_mux_command(
+            "/video/input.mkv",
+            ["/audio/m1.aac", "/audio/m2.aac"],
+            "/output/final.mkv",
+            keep_original_audio=True,
+        )
+
+        map_pairs = [cmd[i:i + 2] for i in range(len(cmd) - 1)]
+        assert ["-map", "0:a"] in map_pairs
+        assert "-disposition:a" in cmd
+        assert cmd[cmd.index("-disposition:a") + 1] == "0"
+        assert "-disposition:a:0" in cmd
+        assert cmd[cmd.index("-disposition:a:0") + 1] == "default"
+        assert "-disposition:a:1" not in cmd
+        assert "-disposition:a:2" not in cmd
+
+
+class TestBuildMkvmergeMuxCommand:
+    def test_video_input_is_first_without_audio_or_tags(self):
+        cmd = build_mkvmerge_mux_command(
+            "/bin/mkvmerge",
+            "/video/input.mkv",
+            ["/audio/m1.aac"],
+            "/output/final.mkv",
+        )
+
+        assert cmd[:4] == [
+            "/bin/mkvmerge",
+            "-o",
+            "/output/final.mkv",
+            "--disable-track-statistics-tags",
+        ]
+        assert cmd[4:9] == [
+            "--no-audio",
+            "--no-chapters",
+            "--no-global-tags",
+            "--no-track-tags",
+            "/video/input.mkv",
+        ]
+        assert "--no-video" not in cmd[4:9]
+        assert "--no-subtitles" not in cmd[4:9]
+
+    def test_generated_audio_inputs_follow_video_input(self):
+        cmd = build_mkvmerge_mux_command(
+            "/bin/mkvmerge",
+            "/video/input.mkv",
+            ["/audio/m1.aac", "/audio/m2.aac"],
+            "/output/final.mkv",
+        )
+
+        first_video_index = cmd.index("/video/input.mkv")
+        second_video_index = cmd.index("/video/input.mkv", first_video_index + 1)
+
+        assert first_video_index < cmd.index("/audio/m1.aac")
+        assert cmd.index("/audio/m1.aac") < cmd.index("/audio/m2.aac")
+        assert cmd.index("/audio/m2.aac") < second_video_index
+
+    def test_original_source_audio_only_input_is_appended_after_generated_audio_when_kept(self):
+        cmd = build_mkvmerge_mux_command(
+            "/bin/mkvmerge",
+            "/video/input.mkv",
+            ["/audio/m1.aac", "/audio/m2.aac"],
+            "/output/final.mkv",
+            keep_original_audio=True,
+        )
+
+        assert cmd[-8:] == [
+            "--no-video",
+            "--no-subtitles",
+            "--no-chapters",
+            "--no-global-tags",
+            "--no-track-tags",
+            "--default-track-flag",
+            "-1:no",
+            "/video/input.mkv",
+        ]
+
+    def test_skips_original_audio_uses_source_video_once_with_no_audio(self):
+        cmd = build_mkvmerge_mux_command(
+            "/bin/mkvmerge",
+            "/video/input.mkv",
+            ["/audio/m1.aac"],
+            "/output/final.mkv",
+            keep_original_audio=False,
+        )
+
+        video_index = cmd.index("/video/input.mkv")
+        video_segment = cmd[4:video_index]
+
+        assert cmd.count("/video/input.mkv") == 1
+        assert video_segment == [
+            "--no-audio",
+            "--no-chapters",
+            "--no-global-tags",
+            "--no-track-tags",
+        ]
+        assert "-1:no" not in cmd
+
+    def test_suppresses_track_and_statistics_tags_for_every_input(self):
+        cmd = build_mkvmerge_mux_command(
+            "/bin/mkvmerge",
+            "/video/input.mkv",
+            ["/audio/m1.aac", "/audio/m2.aac"],
+            "/output/final.mkv",
+            keep_original_audio=True,
+        )
+
+        assert "--disable-track-statistics-tags" in cmd
+        path_indices = []
+        start = 0
+        for path in ["/video/input.mkv", "/audio/m1.aac", "/audio/m2.aac", "/video/input.mkv"]:
+            index = cmd.index(path, start)
+            path_indices.append(index)
+            start = index + 1
+
+        segment_starts = [4, path_indices[0] + 1, path_indices[1] + 1, path_indices[2] + 1]
+        for start, end in zip(segment_starts, path_indices):
+            segment = cmd[start:end]
+            assert "--no-chapters" in segment
+            assert "--no-global-tags" in segment
+            assert "--no-track-tags" in segment
+
+    def test_generated_audio_inputs_disable_video_subtitles_and_tags(self):
+        cmd = build_mkvmerge_mux_command(
+            "/bin/mkvmerge",
+            "/video/input.mkv",
+            ["/audio/m1.aac"],
+            "/output/final.mkv",
+        )
+
+        audio_index = cmd.index("/audio/m1.aac")
+        audio_segment = cmd[cmd.index("/video/input.mkv") + 1:audio_index]
+
+        assert audio_segment == [
+            "--no-video",
+            "--no-subtitles",
+            "--no-chapters",
+            "--no-global-tags",
+            "--no-track-tags",
+            "--default-track-flag",
+            "0:yes",
+        ]
+
+    def test_sets_only_first_final_audio_as_default_track(self):
+        cmd = build_mkvmerge_mux_command(
+            "/bin/mkvmerge",
+            "/video/input.mkv",
+            ["/audio/m1.aac", "/audio/m2.aac", "/audio/m3.aac"],
+            "/output/final.mkv",
+        )
+
+        default_track_indices = [
+            i
+            for i, value in enumerate(cmd)
+            if value == "--default-track-flag" and cmd[i + 1].startswith("0:")
+        ]
+        assert [cmd[i + 1] for i in default_track_indices] == ["0:yes", "0:no", "0:no"]
+        assert default_track_indices[0] < cmd.index("/audio/m1.aac")
+        assert default_track_indices[1] < cmd.index("/audio/m2.aac")
+        assert default_track_indices[2] < cmd.index("/audio/m3.aac")
+
 
 class TestBuildExportAacCommand:
     def test_exports_container_audio_to_adts_aac(self):
@@ -390,10 +581,11 @@ class TestBuildExportAacCommand:
     def test_sets_first_mixed_audio_as_default_track(self):
         cmd = build_mux_command("/video/input.mkv", ["/audio/m1.aac", "/audio/m2.aac"], "/output/final.mkv")
 
+        assert "-disposition:a" in cmd
+        assert cmd[cmd.index("-disposition:a") + 1] == "0"
         assert "-disposition:a:0" in cmd
         assert cmd[cmd.index("-disposition:a:0") + 1] == "default"
-        assert "-disposition:a:1" in cmd
-        assert cmd[cmd.index("-disposition:a:1") + 1] == "0"
+        assert "-disposition:a:1" not in cmd
 
     def test_clears_original_audio_default_when_kept(self):
         cmd = build_mux_command(
@@ -403,8 +595,9 @@ class TestBuildExportAacCommand:
             keep_original_audio=True,
         )
 
-        assert "-disposition:a:2" in cmd
-        assert cmd[cmd.index("-disposition:a:2") + 1] == "0"
+        assert "-disposition:a" in cmd
+        assert cmd[cmd.index("-disposition:a") + 1] == "0"
+        assert "-disposition:a:2" not in cmd
 
 
 class TestBuildPreviewCommand:
@@ -511,6 +704,14 @@ class TestRunFfmpegCommand:
 
 
 class TestValidate:
+    def _write_valid_inputs(self, base_dir, *, input_name="video.mkv"):
+        input_path = os.path.join(base_dir, input_name)
+        audio_dir = os.path.join(base_dir, "audio")
+        os.makedirs(audio_dir)
+        open(input_path, "w").close()
+        open(os.path.join(audio_dir, "bgm.aac"), "w").close()
+        return input_path, audio_dir
+
     def test_missing_input(self):
         with tempfile.TemporaryDirectory() as d:
             audio_dir = os.path.join(d, "audio")
@@ -564,6 +765,286 @@ class TestValidate:
             cfg = CombatAudioConfig(input_path=video_path, audio_dir=audio_dir, audio_order=[])
             ok, err = validate(cfg)
             assert ok is True
+
+    def test_boxed_video_rejects_missing_secondary_video(self):
+        with tempfile.TemporaryDirectory() as d:
+            video_path, audio_dir = self._write_valid_inputs(d)
+            secondary_path = os.path.join(d, "missing-secondary.mkv")
+            cfg = CombatAudioConfig(
+                input_path=video_path,
+                audio_dir=audio_dir,
+                boxed=True,
+                secondary_video_paths=[secondary_path],
+            )
+
+            ok, err = validate(cfg)
+
+            assert ok is False
+            assert err == f"副视频不存在: {secondary_path}"
+
+    def test_non_boxed_ignores_missing_secondary_video(self):
+        with tempfile.TemporaryDirectory() as d:
+            video_path, audio_dir = self._write_valid_inputs(d)
+            cfg = CombatAudioConfig(
+                input_path=video_path,
+                audio_dir=audio_dir,
+                boxed=False,
+                secondary_video_paths=[os.path.join(d, "missing-secondary.mkv")],
+            )
+
+            ok, err = validate(cfg)
+
+            assert ok is True
+            assert err is None
+
+    def test_pure_audio_main_input_ignores_missing_secondary_video(self):
+        with tempfile.TemporaryDirectory() as d:
+            input_path, audio_dir = self._write_valid_inputs(d, input_name="input.aac")
+            cfg = CombatAudioConfig(
+                input_path=input_path,
+                audio_dir=audio_dir,
+                boxed=True,
+                secondary_video_paths=[os.path.join(d, "missing-secondary.mkv")],
+            )
+
+            ok, err = validate(cfg)
+
+            assert ok is True
+            assert err is None
+
+    def test_boxed_video_rejects_existing_non_video_secondary(self, monkeypatch):
+        monkeypatch.setattr("src.core.processors.combat_audio.has_video_stream", lambda path: False)
+        with tempfile.TemporaryDirectory() as d:
+            video_path, audio_dir = self._write_valid_inputs(d)
+            secondary_path = os.path.join(d, "secondary.txt")
+            open(secondary_path, "w").close()
+            cfg = CombatAudioConfig(
+                input_path=video_path,
+                audio_dir=audio_dir,
+                boxed=True,
+                secondary_video_paths=[secondary_path],
+            )
+
+            ok, err = validate(cfg)
+
+            assert ok is False
+            assert err == f"副视频不是视频文件: {secondary_path}"
+
+
+class TestValidateSecondaryVideos:
+    def test_ignored_when_not_boxed(self):
+        cfg = CombatAudioConfig(
+            input_path="/input/video.mkv",
+            audio_dir="/audio",
+            boxed=False,
+            secondary_video_paths=["/missing/secondary.mkv", "/audio/song.aac"],
+        )
+
+        ok, err = validate_secondary_videos(cfg, is_audio=False)
+
+        assert ok is True
+        assert err is None
+
+    def test_error_when_boxed_secondary_is_missing(self):
+        with tempfile.TemporaryDirectory() as d:
+            missing_path = os.path.join(d, "missing.mkv")
+            cfg = CombatAudioConfig(
+                input_path="/input/video.mkv",
+                audio_dir="/audio",
+                boxed=True,
+                secondary_video_paths=[missing_path],
+            )
+
+            ok, err = validate_secondary_videos(cfg, is_audio=False)
+
+            assert ok is False
+            assert err == f"副视频不存在: {missing_path}"
+
+    def test_ignored_for_pure_audio_main_input(self):
+        cfg = CombatAudioConfig(
+            input_path="/input/audio.aac",
+            audio_dir="/audio",
+            boxed=True,
+            secondary_video_paths=["/missing/secondary.mkv", "/audio/song.aac"],
+        )
+
+        ok, err = validate_secondary_videos(cfg, is_audio=True)
+
+        assert ok is True
+        assert err is None
+
+    def test_existing_secondary_video_passes(self, monkeypatch):
+        monkeypatch.setattr("src.core.processors.combat_audio.has_video_stream", lambda path: True)
+        with tempfile.TemporaryDirectory() as d:
+            secondary_path = os.path.join(d, "secondary.mkv")
+            open(secondary_path, "w").close()
+            cfg = CombatAudioConfig(
+                input_path="/input/video.mkv",
+                audio_dir="/audio",
+                boxed=True,
+                secondary_video_paths=[secondary_path],
+            )
+
+            ok, err = validate_secondary_videos(cfg, is_audio=False)
+
+            assert ok is True
+            assert err is None
+
+    def test_existing_txt_secondary_path_is_rejected_when_boxed_video_input(self):
+        with tempfile.TemporaryDirectory() as d:
+            secondary_path = os.path.join(d, "secondary.txt")
+            open(secondary_path, "w").close()
+            cfg = CombatAudioConfig(
+                input_path="/input/video.mkv",
+                audio_dir="/audio",
+                boxed=True,
+                secondary_video_paths=[secondary_path],
+            )
+
+            ok, err = validate_secondary_videos(cfg, is_audio=False)
+
+            assert ok is False
+            assert err == f"副视频不是视频文件: {secondary_path}"
+
+    def test_audio_only_mkv_secondary_path_is_rejected_when_boxed_video_input(self, monkeypatch):
+        monkeypatch.setattr("src.core.processors.combat_audio.has_video_stream", lambda path: False)
+        with tempfile.TemporaryDirectory() as d:
+            secondary_path = os.path.join(d, "secondary.mkv")
+            open(secondary_path, "w").close()
+            cfg = CombatAudioConfig(
+                input_path="/input/video.mkv",
+                audio_dir="/audio",
+                boxed=True,
+                secondary_video_paths=[secondary_path],
+            )
+
+            ok, err = validate_secondary_videos(cfg, is_audio=False)
+
+            assert ok is False
+            assert err == f"副视频不是视频文件: {secondary_path}"
+
+    def test_pure_audio_secondary_path_is_rejected_when_boxed_video_input(self):
+        with tempfile.TemporaryDirectory() as d:
+            secondary_path = os.path.join(d, "secondary.aac")
+            open(secondary_path, "w").close()
+            cfg = CombatAudioConfig(
+                input_path="/input/video.mkv",
+                audio_dir="/audio",
+                boxed=True,
+                secondary_video_paths=[secondary_path],
+            )
+
+            ok, err = validate_secondary_videos(cfg, is_audio=False)
+
+            assert ok is False
+            assert err == f"副视频不是视频文件: {secondary_path}"
+
+
+class TestSanitizeOutputStem:
+    def test_replaces_cross_platform_illegal_characters(self):
+        assert sanitize_output_stem('b\\c:d*e?f"g<h>i|j') == "b_c_d_e_f_g_h_i_j"
+
+    def test_uses_audio_for_empty_result(self):
+        assert sanitize_output_stem("////") == "audio"
+
+    def test_strips_extension_and_compresses_spaces(self):
+        assert sanitize_output_stem("  my   song .mp3") == "my song"
+
+    def test_extensionless_path_uses_basename(self):
+        assert sanitize_output_stem('/tmp/track') == 'track'
+
+
+class TestNamedAudioOutputPaths:
+    def test_non_boxed_outputs_include_original_background_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            video_path = os.path.join(d, "episode_01.mkv")
+            output_dir = os.path.join(d, "output")
+            cfg = CombatAudioConfig(
+                input_path=video_path,
+                audio_dir="/audio",
+                output_dir=output_dir,
+                mix_enabled=True,
+                boxed=False,
+            )
+
+            paths = resolve_output_path(
+                cfg,
+                2,
+                audio_filenames=["bg one.mp3", "bad/name.aac"],
+                timestamp="20260507190000",
+            )
+
+            batch_dir = os.path.join(output_dir, "episode_01_mixed_20260507190000")
+            assert paths == [
+                os.path.join(batch_dir, "01_bg one_mixed.aac"),
+                os.path.join(batch_dir, "02_name_mixed.aac"),
+            ]
+
+    def test_partial_audio_filenames_falls_back_for_unnamed_outputs(self):
+        with tempfile.TemporaryDirectory() as d:
+            video_path = os.path.join(d, "episode_01.mkv")
+            output_dir = os.path.join(d, "output")
+            cfg = CombatAudioConfig(
+                input_path=video_path,
+                audio_dir="/audio",
+                output_dir=output_dir,
+                mix_enabled=False,
+                boxed=False,
+            )
+
+            paths = resolve_output_path(
+                cfg,
+                3,
+                audio_filenames=["bg one.mp3"],
+                timestamp="20260507190000",
+            )
+
+            batch_dir = os.path.join(output_dir, "episode_01_aligned_20260507190000")
+            assert paths == [
+                os.path.join(batch_dir, "01_bg one_aligned.aac"),
+                os.path.join(batch_dir, "episode_01_aligned_01.aac"),
+                os.path.join(batch_dir, "episode_01_aligned_02.aac"),
+            ]
+
+
+class TestResolveMkvOutputPaths:
+    def test_single_mkv_keeps_existing_name_when_no_secondary_videos(self):
+        with tempfile.TemporaryDirectory() as d:
+            video_path = os.path.join(d, "episode_01.mkv")
+            output_dir = os.path.join(d, "output")
+            cfg = CombatAudioConfig(
+                input_path=video_path,
+                audio_dir="/audio",
+                output_dir=output_dir,
+                boxed=True,
+            )
+
+            paths = resolve_mkv_output_paths(cfg, timestamp="20260507190000")
+
+            assert paths == [os.path.join(output_dir, "episode_01_20260507190000.mkv")]
+
+    def test_secondary_videos_use_part_suffixes_and_same_timestamp(self):
+        with tempfile.TemporaryDirectory() as d:
+            video_path = os.path.join(d, "episode_01.mkv")
+            output_dir = os.path.join(d, "output")
+            cfg = CombatAudioConfig(
+                input_path=video_path,
+                audio_dir="/audio",
+                output_dir=output_dir,
+                boxed=True,
+                secondary_video_paths=[
+                    os.path.join(d, "episode_01_part2.mkv"),
+                    os.path.join(d, "episode_01_part3.mkv"),
+                ],
+            )
+
+            paths = resolve_mkv_output_paths(cfg, timestamp="20260507190000")
+
+            assert paths == [
+                os.path.join(output_dir, "episode_01_20260507190000-part1.mkv"),
+                os.path.join(output_dir, "episode_01_20260507190000-part2.mkv"),
+                os.path.join(output_dir, "episode_01_20260507190000-part3.mkv"),
+            ]
 
 
 class TestResolveOutputPath:

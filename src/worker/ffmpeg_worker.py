@@ -13,6 +13,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from src.core.config import CombatAudioConfig, OutputFormat, PicSeqConfig, TaskType
 from src.core.data_dir import get_temp_root_dir
 from src.core.encoder_registry import EncoderRegistry
+from src.core.external_tools import MuxBackend, resolve_mux_backend
 from src.core.processors import combat_audio, pic_seq
 
 _FRAME_RE = re.compile(r"frame=\s*(\d+)")
@@ -179,6 +180,7 @@ class FFmpegWorker(QThread):
         progress_desc: str = "处理中",
         progress_callback=None,
         track_main_process: bool = True,
+        success_returncodes: tuple[int, ...] = (0,),
     ) -> bool:
         effective_cmd = self._with_progress_args(cmd)
         error_tail: deque[str] = deque(maxlen=8)
@@ -226,7 +228,7 @@ class FFmpegWorker(QThread):
             detail = "\n".join(error_tail).strip()
             if track_main_process:
                 self._last_ffmpeg_error_detail = detail or None
-            return process.returncode == 0
+            return process.returncode in success_returncodes
         finally:
             if track_main_process and self._process is process:
                 self._process = None
@@ -237,6 +239,7 @@ class FFmpegWorker(QThread):
         *,
         progress_total: float | None = None,
         progress_desc: str = "处理中",
+        success_returncodes: tuple[int, ...] = (0,),
     ) -> bool:
         # 启动子进程前再检查，避免已取消仍去 Popen
         if self._cancel_event.is_set():
@@ -246,6 +249,7 @@ class FFmpegWorker(QThread):
             progress_total=progress_total,
             progress_desc=progress_desc,
             track_main_process=True,
+            success_returncodes=success_returncodes,
         )
 
     def cancel(self):
@@ -349,30 +353,36 @@ class FFmpegWorker(QThread):
         if adjusted_paths is None:
             return
 
+        adjusted_items = [
+            (name, adj) for name, adj in zip(audio_files, adjusted_paths)
+            if adj is not None
+        ]
+
         # Phase 3: Mix (parallel, only if mix_effective)
         if mix_effective:
             phase_idx += 1
             mixed_dir = os.path.join(tmp_dir, "mixed")
             os.makedirs(mixed_dir)
-            items_with_adjusted = [
-                (name, adj) for name, adj in zip(audio_files, adjusted_paths)
-                if adj is not None
-            ]
+            items_with_adjusted = adjusted_items
             display_for_mix = [name for name, _ in items_with_adjusted]
-            final_paths = self._parallel_phase(
+            mixed_paths = self._parallel_phase(
                 config, items_with_adjusted, display_for_mix, phase_idx, phase_total,
                 (base_audio, base_duration), mixed_dir, "混音",
                 lambda cfg, item, idx, mix_input, out_dir, progress_cb=None: self._mix_one(
                     cfg, item, idx, mix_input, out_dir, progress_cb=progress_cb
                 ),
             )
-            if final_paths is None:
+            if mixed_paths is None:
                 return
+            final_items = [
+                (name, path) for name, path in zip(display_for_mix, mixed_paths)
+                if path is not None
+            ]
         else:
-            final_paths = [p for p in adjusted_paths if p is not None]
+            final_items = adjusted_items
 
-        # Filter out None results from failed items
-        final_paths = [p for p in final_paths if p is not None]
+        final_audio_filenames = [name for name, _ in final_items]
+        final_paths = [path for _, path in final_items]
         if not final_paths:
             if self._parallel_phase_failures:
                 detail_lines = [
@@ -395,29 +405,63 @@ class FFmpegWorker(QThread):
 
         # Phase 4: Mux to MKV (optional)；输出文件名后缀与是否实际混音一致
         output_paths = combat_audio.resolve_output_path(
-            replace(config, mix_enabled=mix_effective), audio_count=len(final_paths)
+            replace(config, mix_enabled=mix_effective),
+            audio_count=len(final_paths),
+            audio_filenames=final_audio_filenames,
         )
         if config.boxed and not is_audio:
             phase_idx += 1
+            videos_to_mux = [config.input_path] + list(config.secondary_video_paths or [])
+            if not output_paths or len(output_paths) != len(videos_to_mux):
+                self.error.emit(
+                    f"MKV 输出数量异常：需要 {len(videos_to_mux)} 个，实际 {len(output_paths)} 个"
+                )
+                return
             out_dir = os.path.dirname(output_paths[0])
             os.makedirs(out_dir, exist_ok=True)
-            self.progress.emit(0, 100, phase_desc(phase_idx, "封装MKV"))
-            cmd = combat_audio.build_mux_command(
-                config.input_path, final_paths, output_paths[0],
-                keep_original_audio=has_audio_streams,
-            )
-            if not self._exec_ffmpeg(
-                cmd,
-                progress_total=base_duration,
-                progress_desc=phase_desc(phase_idx, "封装MKV"),
-            ):
-                if self._cancel_event.is_set():
-                    self.error.emit("已取消")
+            mux_jobs = list(zip(videos_to_mux, output_paths))
+            mux_backend, mkvmerge_path = resolve_mux_backend(config.mux_backend, config.mkvmerge_path)
+            mux_total = max(len(mux_jobs), 1)
+            for idx, (video_path, output_path) in enumerate(mux_jobs, start=1):
+                filename = os.path.basename(video_path)
+                label = f"封装MKV part {idx}/{mux_total}"
+                desc = phase_desc(phase_idx, label, filename)
+                self.progress.emit(0, 100, desc)
+                if self._emit_cancelled_if_needed():
                     return
-                self.error.emit(self._compose_error_message("MKV 封装失败", self._last_ffmpeg_error_detail))
-                return
-            self.progress.emit(100, 100, phase_desc(phase_idx, "封装MKV"))
-            self.finished.emit(output_paths[0])
+
+                part_has_audio_streams = bool(combat_audio.probe_audio_streams(video_path))
+                if mux_backend == MuxBackend.MKVMERGE and mkvmerge_path:
+                    cmd = combat_audio.build_mkvmerge_mux_command(
+                        mkvmerge_path,
+                        video_path,
+                        final_paths,
+                        output_path,
+                        keep_original_audio=part_has_audio_streams,
+                    )
+                    mux_success_returncodes = (0, 1)
+                else:
+                    cmd = combat_audio.build_mux_command(
+                        video_path,
+                        final_paths,
+                        output_path,
+                        keep_original_audio=part_has_audio_streams,
+                    )
+                    mux_success_returncodes = (0,)
+                if not self._exec_ffmpeg(
+                    cmd,
+                    progress_total=base_duration,
+                    progress_desc=desc,
+                    success_returncodes=mux_success_returncodes,
+                ):
+                    if self._cancel_event.is_set():
+                        self.error.emit("已取消")
+                        return
+                    summary = f"MKV 封装失败 part {idx}/{mux_total}: {filename}"
+                    self.error.emit(self._compose_error_message(summary, self._last_ffmpeg_error_detail))
+                    return
+                self.progress.emit(100, 100, desc)
+            self.finished.emit(out_dir if len(output_paths) > 1 else output_paths[0])
         else:
             # Export final audio files to user-facing AAC outputs.
             out_dir = os.path.dirname(output_paths[0])

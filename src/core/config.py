@@ -82,10 +82,15 @@ class CombatAudioConfig:
     thread_count: int = 1
     audio_stream_index: int = 0
     audio_order: list[str] | None = None
+    secondary_video_paths: list[str] | None = None
+    mkvmerge_path: str | None = None
+    mux_backend: str = "auto"
 
     def __post_init__(self):
         if self.audio_order is None:
             self.audio_order = []
+        if self.secondary_video_paths is None:
+            self.secondary_video_paths = []
 
     def to_dict(self) -> dict:
         return {
@@ -98,6 +103,9 @@ class CombatAudioConfig:
             "thread_count": self.thread_count,
             "audio_stream_index": self.audio_stream_index,
             "audio_order": self.audio_order,
+            "secondary_video_paths": self.secondary_video_paths,
+            "mkvmerge_path": self.mkvmerge_path,
+            "mux_backend": self.mux_backend,
         }
 
     @classmethod
@@ -112,4 +120,7 @@ class CombatAudioConfig:
             thread_count=d.get("thread_count", 1),
             audio_stream_index=d.get("audio_stream_index", 0),
             audio_order=d.get("audio_order", []),
+            secondary_video_paths=d.get("secondary_video_paths", []),
+            mkvmerge_path=d.get("mkvmerge_path"),
+            mux_backend=d.get("mux_backend", "auto"),
         )
