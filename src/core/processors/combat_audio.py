@@ -381,6 +381,20 @@ def validate(config: CombatAudioConfig) -> tuple[bool, str | None]:
     return True, None
 
 
+def validate_secondary_videos(config: CombatAudioConfig, *, is_audio: bool) -> tuple[bool, str | None]:
+    """Validate secondary videos for boxed video output."""
+    if is_audio or not config.boxed:
+        return True, None
+
+    for path in config.secondary_video_paths or []:
+        if not os.path.exists(path):
+            return False, f"副视频不存在: {path}"
+        if is_pure_audio(path):
+            return False, f"副视频不是视频文件: {path}"
+
+    return True, None
+
+
 def sanitize_output_stem(filename: str, max_length=80) -> str:
     """Create a safe output filename stem from a source filename."""
     basename = os.path.basename(filename)

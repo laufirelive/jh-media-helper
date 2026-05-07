@@ -27,6 +27,7 @@ from src.core.processors.combat_audio import (
     sanitize_output_stem,
     scan_audio_dir,
     validate,
+    validate_secondary_videos,
 )
 
 
@@ -644,6 +645,81 @@ class TestValidate:
             cfg = CombatAudioConfig(input_path=video_path, audio_dir=audio_dir, audio_order=[])
             ok, err = validate(cfg)
             assert ok is True
+
+
+class TestValidateSecondaryVideos:
+    def test_ignored_when_not_boxed(self):
+        cfg = CombatAudioConfig(
+            input_path="/input/video.mkv",
+            audio_dir="/audio",
+            boxed=False,
+            secondary_video_paths=["/missing/secondary.mkv", "/audio/song.aac"],
+        )
+
+        ok, err = validate_secondary_videos(cfg, is_audio=False)
+
+        assert ok is True
+        assert err is None
+
+    def test_error_when_boxed_secondary_is_missing(self):
+        with tempfile.TemporaryDirectory() as d:
+            missing_path = os.path.join(d, "missing.mkv")
+            cfg = CombatAudioConfig(
+                input_path="/input/video.mkv",
+                audio_dir="/audio",
+                boxed=True,
+                secondary_video_paths=[missing_path],
+            )
+
+            ok, err = validate_secondary_videos(cfg, is_audio=False)
+
+            assert ok is False
+            assert err == f"副视频不存在: {missing_path}"
+
+    def test_ignored_for_pure_audio_main_input(self):
+        cfg = CombatAudioConfig(
+            input_path="/input/audio.aac",
+            audio_dir="/audio",
+            boxed=True,
+            secondary_video_paths=["/missing/secondary.mkv", "/audio/song.aac"],
+        )
+
+        ok, err = validate_secondary_videos(cfg, is_audio=True)
+
+        assert ok is True
+        assert err is None
+
+    def test_existing_secondary_video_passes(self):
+        with tempfile.TemporaryDirectory() as d:
+            secondary_path = os.path.join(d, "secondary.mkv")
+            open(secondary_path, "w").close()
+            cfg = CombatAudioConfig(
+                input_path="/input/video.mkv",
+                audio_dir="/audio",
+                boxed=True,
+                secondary_video_paths=[secondary_path],
+            )
+
+            ok, err = validate_secondary_videos(cfg, is_audio=False)
+
+            assert ok is True
+            assert err is None
+
+    def test_pure_audio_secondary_path_is_rejected_when_boxed_video_input(self):
+        with tempfile.TemporaryDirectory() as d:
+            secondary_path = os.path.join(d, "secondary.aac")
+            open(secondary_path, "w").close()
+            cfg = CombatAudioConfig(
+                input_path="/input/video.mkv",
+                audio_dir="/audio",
+                boxed=True,
+                secondary_video_paths=[secondary_path],
+            )
+
+            ok, err = validate_secondary_videos(cfg, is_audio=False)
+
+            assert ok is False
+            assert err == f"副视频不是视频文件: {secondary_path}"
 
 
 class TestSanitizeOutputStem:
