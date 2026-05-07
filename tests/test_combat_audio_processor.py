@@ -592,6 +592,14 @@ class TestRunFfmpegCommand:
 
 
 class TestValidate:
+    def _write_valid_inputs(self, base_dir, *, input_name="video.mkv"):
+        input_path = os.path.join(base_dir, input_name)
+        audio_dir = os.path.join(base_dir, "audio")
+        os.makedirs(audio_dir)
+        open(input_path, "w").close()
+        open(os.path.join(audio_dir, "bgm.aac"), "w").close()
+        return input_path, audio_dir
+
     def test_missing_input(self):
         with tempfile.TemporaryDirectory() as d:
             audio_dir = os.path.join(d, "audio")
@@ -645,6 +653,52 @@ class TestValidate:
             cfg = CombatAudioConfig(input_path=video_path, audio_dir=audio_dir, audio_order=[])
             ok, err = validate(cfg)
             assert ok is True
+
+    def test_boxed_video_rejects_missing_secondary_video(self):
+        with tempfile.TemporaryDirectory() as d:
+            video_path, audio_dir = self._write_valid_inputs(d)
+            secondary_path = os.path.join(d, "missing-secondary.mkv")
+            cfg = CombatAudioConfig(
+                input_path=video_path,
+                audio_dir=audio_dir,
+                boxed=True,
+                secondary_video_paths=[secondary_path],
+            )
+
+            ok, err = validate(cfg)
+
+            assert ok is False
+            assert err == f"副视频不存在: {secondary_path}"
+
+    def test_non_boxed_ignores_missing_secondary_video(self):
+        with tempfile.TemporaryDirectory() as d:
+            video_path, audio_dir = self._write_valid_inputs(d)
+            cfg = CombatAudioConfig(
+                input_path=video_path,
+                audio_dir=audio_dir,
+                boxed=False,
+                secondary_video_paths=[os.path.join(d, "missing-secondary.mkv")],
+            )
+
+            ok, err = validate(cfg)
+
+            assert ok is True
+            assert err is None
+
+    def test_pure_audio_main_input_ignores_missing_secondary_video(self):
+        with tempfile.TemporaryDirectory() as d:
+            input_path, audio_dir = self._write_valid_inputs(d, input_name="input.aac")
+            cfg = CombatAudioConfig(
+                input_path=input_path,
+                audio_dir=audio_dir,
+                boxed=True,
+                secondary_video_paths=[os.path.join(d, "missing-secondary.mkv")],
+            )
+
+            ok, err = validate(cfg)
+
+            assert ok is True
+            assert err is None
 
 
 class TestValidateSecondaryVideos:

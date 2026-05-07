@@ -378,7 +378,8 @@ def validate(config: CombatAudioConfig) -> tuple[bool, str | None]:
     if not audio_files:
         return False, f"音频文件夹为空: {config.audio_dir}"
 
-    return True, None
+    is_audio = is_pure_audio(config.input_path)
+    return validate_secondary_videos(config, is_audio=is_audio)
 
 
 def validate_secondary_videos(config: CombatAudioConfig, *, is_audio: bool) -> tuple[bool, str | None]:
