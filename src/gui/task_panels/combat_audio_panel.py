@@ -383,9 +383,10 @@ class CombatAudioPanel(BaseTaskPanel):
 
     def _update_param_states(self):
         """Update parameter enable/disable states based on current selections."""
-        has_input = bool(self._input_selector.path())
+        input_path = self._input_selector.path()
+        has_valid_input = bool(input_path) and os.path.exists(input_path)
         is_audio = self._is_pure_audio
-        is_video_input = has_input and not is_audio
+        is_video_input = has_valid_input and not is_audio
         has_audio_streams = len(self._input_streams) > 0
 
         # 无音轨视频无法与原片混音：自动关闭选项并禁用，避免误选
