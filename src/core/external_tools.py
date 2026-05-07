@@ -9,7 +9,15 @@ class MuxBackend(Enum):
 
 
 def _is_executable_file(path: str | None) -> bool:
-    return bool(path) and os.path.isfile(path) and os.access(path, os.X_OK)
+    try:
+        return (
+            bool(path)
+            and os.path.isfile(path)
+            and os.access(path, os.X_OK)
+            and os.path.getsize(path) > 0
+        )
+    except OSError:
+        return False
 
 
 def resolve_mkvmerge_path(manual_path: str | None = None) -> str | None:

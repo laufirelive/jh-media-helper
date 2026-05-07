@@ -61,3 +61,12 @@ def test_manual_path_must_be_executable(tmp_path, monkeypatch):
     monkeypatch.setattr("src.core.external_tools.shutil.which", lambda name: None)
 
     assert resolve_mkvmerge_path(str(tool)) is None
+
+
+def test_manual_path_must_not_be_empty(tmp_path, monkeypatch):
+    tool = tmp_path / "mkvmerge"
+    tool.touch()
+    tool.chmod(0o755)
+    monkeypatch.setattr("src.core.external_tools.shutil.which", lambda name: None)
+
+    assert resolve_mkvmerge_path(str(tool)) is None
