@@ -347,8 +347,7 @@ def validate(config: CombatAudioConfig) -> tuple[bool, str | None]:
 def sanitize_output_stem(filename: str, max_length=80) -> str:
     """Create a safe output filename stem from a source filename."""
     basename = os.path.basename(filename)
-    basename_stem, basename_ext = os.path.splitext(basename)
-    stem = basename_stem if basename_ext else os.path.splitext(filename)[0]
+    stem = os.path.splitext(basename)[0]
 
     for char in '/\\:*?"<>|':
         stem = stem.replace(char, "_")

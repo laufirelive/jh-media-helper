@@ -570,13 +570,16 @@ class TestValidate:
 
 class TestSanitizeOutputStem:
     def test_replaces_cross_platform_illegal_characters(self):
-        assert sanitize_output_stem('a/b\\c:d*e?f"g<h>i|j') == "a_b_c_d_e_f_g_h_i_j"
+        assert sanitize_output_stem('b\\c:d*e?f"g<h>i|j') == "b_c_d_e_f_g_h_i_j"
 
     def test_uses_audio_for_empty_result(self):
         assert sanitize_output_stem("////") == "audio"
 
     def test_strips_extension_and_compresses_spaces(self):
         assert sanitize_output_stem("  my   song .mp3") == "my song"
+
+    def test_extensionless_path_uses_basename(self):
+        assert sanitize_output_stem('/tmp/track') == 'track'
 
 
 class TestNamedAudioOutputPaths:
