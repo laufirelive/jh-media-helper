@@ -42,13 +42,13 @@ class TestErrorMessageFormatting:
 
 
 class _FakeProcess:
-    def __init__(self, raise_timeout: bool, stderr_lines=None):
+    def __init__(self, raise_timeout: bool, stderr_lines=None, returncode: int = 0):
         self.raise_timeout = raise_timeout
         self.terminated = 0
         self.killed = 0
         self._polled = None
         self.stderr = iter(stderr_lines or [])
-        self.returncode = 0
+        self.returncode = returncode
 
     def poll(self):
         return self._polled
@@ -59,8 +59,8 @@ class _FakeProcess:
     def wait(self, timeout=None):
         if self.raise_timeout and timeout is not None and self.killed == 0:
             raise subprocess.TimeoutExpired(cmd="ffmpeg", timeout=timeout)
-        self._polled = 0
-        return 0
+        self._polled = self.returncode
+        return self.returncode
 
     def kill(self):
         self.killed += 1
@@ -160,6 +160,30 @@ class TestWorkerProgress:
         assert (99, 100, "提取音频") in progress_events
         assert (100, 100, "提取音频") not in progress_events
 
+    def test_exec_ffmpeg_accepts_custom_success_returncodes(self, monkeypatch):
+        fake = _FakeProcess(raise_timeout=False, returncode=1)
+
+        monkeypatch.setattr(
+            "src.worker.ffmpeg_worker.subprocess.Popen",
+            lambda *args, **kwargs: fake,
+        )
+
+        worker = FFmpegWorker(TaskType.COMBAT_AUDIO, {}, encoder_registry=None)
+
+        assert worker._exec_ffmpeg(["mkvmerge", "-o", "out.mkv", "in.mkv"], success_returncodes=(0, 1)) is True
+
+    def test_exec_ffmpeg_keeps_default_success_as_returncode_zero_only(self, monkeypatch):
+        fake = _FakeProcess(raise_timeout=False, returncode=1)
+
+        monkeypatch.setattr(
+            "src.worker.ffmpeg_worker.subprocess.Popen",
+            lambda *args, **kwargs: fake,
+        )
+
+        worker = FFmpegWorker(TaskType.COMBAT_AUDIO, {}, encoder_registry=None)
+
+        assert worker._exec_ffmpeg(["ffmpeg", "-y", "-i", "in.mp4", "out.mkv"]) is False
+
     def test_parallel_phase_emits_intermediate_aggregated_progress(self):
         worker = FFmpegWorker(TaskType.COMBAT_AUDIO, {}, encoder_registry=None)
         progress_events = []
@@ -234,8 +258,8 @@ class TestWorkerProgress:
             lambda self, *args, **kwargs: ["/tmp/mixed_00.m4a"],
         )
 
-        def fake_exec(self, cmd, *, progress_total=None, progress_desc="处理中"):
-            exec_calls.append((cmd, progress_total, progress_desc))
+        def fake_exec(self, cmd, *, progress_total=None, progress_desc="处理中", success_returncodes=(0,)):
+            exec_calls.append((cmd, progress_total, progress_desc, success_returncodes))
             return True
 
         monkeypatch.setattr(FFmpegWorker, "_exec_ffmpeg", fake_exec)
@@ -290,8 +314,8 @@ class TestWorkerProgress:
             lambda self, *args, **kwargs: ["/tmp/mixed_00.m4a", "/tmp/mixed_01.m4a"],
         )
 
-        def fake_exec(self, cmd, *, progress_total=None, progress_desc="处理中"):
-            exec_calls.append((cmd, progress_total, progress_desc))
+        def fake_exec(self, cmd, *, progress_total=None, progress_desc="处理中", success_returncodes=(0,)):
+            exec_calls.append((cmd, progress_total, progress_desc, success_returncodes))
             return True
 
         monkeypatch.setattr(FFmpegWorker, "_exec_ffmpeg", fake_exec)
@@ -311,10 +335,10 @@ class TestWorkerProgress:
 
         final_paths = ["/tmp/mixed_00.m4a", "/tmp/mixed_01.m4a"]
         assert exec_calls == [
-            (["ffmpeg", "extract"], 20.0, "[1/4] 提取音频"),
-            (["mkvmerge", "/tmp/in.mkv", "/tmp/out/in-part1.mkv"], 20.0, "[4/4] 封装MKV part 1/3 — in.mkv"),
-            (["mkvmerge", "/tmp/part2.mkv", "/tmp/out/in-part2.mkv"], 20.0, "[4/4] 封装MKV part 2/3 — part2.mkv"),
-            (["mkvmerge", "/tmp/part3.mkv", "/tmp/out/in-part3.mkv"], 20.0, "[4/4] 封装MKV part 3/3 — part3.mkv"),
+            (["ffmpeg", "extract"], 20.0, "[1/4] 提取音频", (0,)),
+            (["mkvmerge", "/tmp/in.mkv", "/tmp/out/in-part1.mkv"], 20.0, "[4/4] 封装MKV part 1/3 — in.mkv", (0, 1)),
+            (["mkvmerge", "/tmp/part2.mkv", "/tmp/out/in-part2.mkv"], 20.0, "[4/4] 封装MKV part 2/3 — part2.mkv", (0, 1)),
+            (["mkvmerge", "/tmp/part3.mkv", "/tmp/out/in-part3.mkv"], 20.0, "[4/4] 封装MKV part 3/3 — part3.mkv", (0, 1)),
         ]
         assert mkvmerge_calls == [
             ("/usr/bin/mkvmerge", "/tmp/in.mkv", final_paths, "/tmp/out/in-part1.mkv", True),

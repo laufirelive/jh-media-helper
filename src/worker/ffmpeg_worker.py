@@ -180,6 +180,7 @@ class FFmpegWorker(QThread):
         progress_desc: str = "处理中",
         progress_callback=None,
         track_main_process: bool = True,
+        success_returncodes: tuple[int, ...] = (0,),
     ) -> bool:
         effective_cmd = self._with_progress_args(cmd)
         error_tail: deque[str] = deque(maxlen=8)
@@ -227,7 +228,7 @@ class FFmpegWorker(QThread):
             detail = "\n".join(error_tail).strip()
             if track_main_process:
                 self._last_ffmpeg_error_detail = detail or None
-            return process.returncode == 0
+            return process.returncode in success_returncodes
         finally:
             if track_main_process and self._process is process:
                 self._process = None
@@ -238,6 +239,7 @@ class FFmpegWorker(QThread):
         *,
         progress_total: float | None = None,
         progress_desc: str = "处理中",
+        success_returncodes: tuple[int, ...] = (0,),
     ) -> bool:
         # 启动子进程前再检查，避免已取消仍去 Popen
         if self._cancel_event.is_set():
@@ -247,6 +249,7 @@ class FFmpegWorker(QThread):
             progress_total=progress_total,
             progress_desc=progress_desc,
             track_main_process=True,
+            success_returncodes=success_returncodes,
         )
 
     def cancel(self):
@@ -436,6 +439,7 @@ class FFmpegWorker(QThread):
                         output_path,
                         keep_original_audio=part_has_audio_streams,
                     )
+                    mux_success_returncodes = (0, 1)
                 else:
                     cmd = combat_audio.build_mux_command(
                         video_path,
@@ -443,10 +447,12 @@ class FFmpegWorker(QThread):
                         output_path,
                         keep_original_audio=part_has_audio_streams,
                     )
+                    mux_success_returncodes = (0,)
                 if not self._exec_ffmpeg(
                     cmd,
                     progress_total=base_duration,
                     progress_desc=desc,
+                    success_returncodes=mux_success_returncodes,
                 ):
                     if self._cancel_event.is_set():
                         self.error.emit("已取消")

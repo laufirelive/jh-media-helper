@@ -269,10 +269,10 @@ def build_mux_command(
     ]
 
     if mixed_audios:
-        cmd += ["-disposition:a:0", "default"]
-        total_audio_tracks = len(mixed_audios) + (1 if keep_original_audio else 0)
-        for audio_index in range(1, total_audio_tracks):
-            cmd += [f"-disposition:a:{audio_index}", "0"]
+        cmd += [
+            "-disposition:a", "0",
+            "-disposition:a:0", "default",
+        ]
 
     cmd += [output_path]
 
@@ -292,15 +292,13 @@ def build_mkvmerge_mux_command(
         mkvmerge_path,
         "-o",
         output_path,
-        "--no-global-tags",
+        "--disable-track-statistics-tags",
+        "--no-audio",
         "--no-chapters",
+        "--no-global-tags",
+        "--no-track-tags",
+        video_path,
     ]
-
-    if keep_original_audio:
-        cmd += ["--default-track-flag", "-1:no"]
-    else:
-        cmd += ["--no-audio"]
-    cmd += [video_path]
 
     for index, audio_path in enumerate(final_audios):
         cmd += [
@@ -308,9 +306,22 @@ def build_mkvmerge_mux_command(
             "--no-subtitles",
             "--no-chapters",
             "--no-global-tags",
+            "--no-track-tags",
             "--default-track-flag",
             "0:yes" if index == 0 else "0:no",
             audio_path,
+        ]
+
+    if keep_original_audio:
+        cmd += [
+            "--no-video",
+            "--no-subtitles",
+            "--no-chapters",
+            "--no-global-tags",
+            "--no-track-tags",
+            "--default-track-flag",
+            "-1:no",
+            video_path,
         ]
 
     return cmd
