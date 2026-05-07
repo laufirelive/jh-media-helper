@@ -357,6 +357,22 @@ class TestBuildMuxCommand:
         assert "-c" in cmd
         assert "copy" in cmd
 
+    def test_drops_source_metadata_and_chapters(self):
+        cmd = build_mux_command("/video/input.mkv", ["/audio/m1.m4a"], "/output/final.mkv")
+
+        assert "-map_metadata" in cmd
+        assert cmd[cmd.index("-map_metadata") + 1] == "-1"
+        assert "-map_chapters" in cmd
+        assert cmd[cmd.index("-map_chapters") + 1] == "-1"
+
+    def test_resets_timestamps_for_mkv_muxing(self):
+        cmd = build_mux_command("/video/input.mkv", ["/audio/m1.m4a"], "/output/final.mkv")
+
+        assert "-fflags" in cmd
+        assert cmd[cmd.index("-fflags") + 1] == "+genpts"
+        assert "-avoid_negative_ts" in cmd
+        assert cmd[cmd.index("-avoid_negative_ts") + 1] == "make_zero"
+
 
 class TestBuildExportAacCommand:
     def test_exports_container_audio_to_adts_aac(self):
@@ -584,3 +600,23 @@ class TestResolveOutputPath:
             cfg = CombatAudioConfig(input_path=video_path, audio_dir="/audio", output_dir=output_dir, boxed=False)
             paths = resolve_output_path(cfg, 1)
             assert paths[0].startswith(output_dir)
+
+    def test_non_boxed_outputs_are_grouped_in_batch_subdirectory(self):
+        with tempfile.TemporaryDirectory() as d, patch(
+            "src.core.processors.combat_audio.time.strftime",
+            return_value="20260507123456",
+        ):
+            video_path = os.path.join(d, "episode_01.mkv")
+            output_dir = os.path.join(d, "output")
+            cfg = CombatAudioConfig(
+                input_path=video_path,
+                audio_dir="/audio",
+                output_dir=output_dir,
+                mix_enabled=True,
+                boxed=False,
+            )
+
+            paths = resolve_output_path(cfg, 2)
+
+            assert os.path.dirname(paths[0]) == os.path.join(output_dir, "episode_01_mixed_20260507123456")
+            assert os.path.dirname(paths[1]) == os.path.join(output_dir, "episode_01_mixed_20260507123456")

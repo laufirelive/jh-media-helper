@@ -420,7 +420,7 @@ class FFmpegWorker(QThread):
             self.finished.emit(output_paths[0])
         else:
             # Export final audio files to user-facing AAC outputs.
-            out_dir = config.output_dir or os.path.dirname(config.input_path)
+            out_dir = os.path.dirname(output_paths[0])
             os.makedirs(out_dir, exist_ok=True)
             for i, src in enumerate(final_paths):
                 if i < len(output_paths):

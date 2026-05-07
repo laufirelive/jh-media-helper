@@ -248,7 +248,7 @@ def build_mux_command(
     keep_original_audio: bool = True,
 ) -> list[str]:
     """Build ffmpeg command to mux video with multiple audio tracks."""
-    cmd = ["ffmpeg", "-y", "-i", video_path]
+    cmd = ["ffmpeg", "-y", "-fflags", "+genpts", "-i", video_path]
 
     for audio in mixed_audios:
         cmd += ["-i", audio]
@@ -261,7 +261,12 @@ def build_mux_command(
     if keep_original_audio:
         cmd += ["-map", "0:a"]
 
-    cmd += ["-c", "copy"]
+    cmd += [
+        "-map_metadata", "-1",
+        "-map_chapters", "-1",
+        "-c", "copy",
+        "-avoid_negative_ts", "make_zero",
+    ]
 
     if mixed_audios:
         cmd += ["-disposition:a:0", "default"]
@@ -353,6 +358,8 @@ def resolve_output_path(config: CombatAudioConfig, audio_count: int) -> list[str
         return [os.path.join(output_dir, f"{input_stem}_{ts}.mkv")]
 
     suffix = "mixed" if config.mix_enabled else "aligned"
+    ts = time.strftime("%Y%m%d%H%M%S")
+    output_dir = os.path.join(output_dir, f"{input_stem}_{suffix}_{ts}")
     paths = []
     for i in range(audio_count):
         filename = f"{input_stem}_{suffix}_{i:02d}.aac"

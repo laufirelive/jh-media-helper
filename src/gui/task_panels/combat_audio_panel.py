@@ -508,8 +508,10 @@ class CombatAudioPanel(BaseTaskPanel):
 
         by_path = {item.path: item for item in self._bg_files}
         reordered = []
-        for row in range(self._bg_table.rowCount()):
-            item = self._bg_table.item(row, 1)
+        header = getattr(self._bg_table, "verticalHeader", lambda: None)()
+        for visual_row in range(self._bg_table.rowCount()):
+            logical_row = header.logicalIndex(visual_row) if header is not None else visual_row
+            item = self._bg_table.item(logical_row, 1)
             path = item.data(Qt.ItemDataRole.UserRole) if item else None
             if not path or path not in by_path:
                 self._refresh_bg_table()
@@ -759,6 +761,7 @@ class CombatAudioPanel(BaseTaskPanel):
         if selected_track < 0:
             selected_track = 0
 
+        self._reconcile_bg_order_after_drop()
         audio_order = [f.filename for f in self._bg_files]
 
         # 与界面逻辑一致：无音轨视频禁止混原片（防止旧配置或异常状态下仍上报 mix_enabled）

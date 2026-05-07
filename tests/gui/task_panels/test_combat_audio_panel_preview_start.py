@@ -149,6 +149,58 @@ def test_reconcile_bg_order_after_drop_keeps_table_order(panel):
     panel._refresh_bg_table.assert_called_once_with()
 
 
+def test_reconcile_bg_order_after_drop_uses_visual_header_order(panel):
+    class DummyItem:
+        def __init__(self, path: str):
+            self._path = path
+
+        def data(self, role):
+            return self._path
+
+    class DummyHeader:
+        def __init__(self, visual_to_logical: list[int]):
+            self._visual_to_logical = visual_to_logical
+
+        def logicalIndex(self, visual_index: int):
+            return self._visual_to_logical[visual_index]
+
+    class DummyTable:
+        def __init__(self, paths: list[str], visual_to_logical: list[int]):
+            self._paths = paths
+            self._header = DummyHeader(visual_to_logical)
+
+        def rowCount(self):
+            return len(self._paths)
+
+        def item(self, row: int, column: int):
+            if column != 1:
+                return None
+            return DummyItem(self._paths[row])
+
+        def verticalHeader(self):
+            return self._header
+
+    panel._bg_files = [
+        type("Bg", (), {"path": "/music/01.aac", "filename": "01.aac"})(),
+        type("Bg", (), {"path": "/music/02.aac", "filename": "02.aac"})(),
+        type("Bg", (), {"path": "/music/03.aac", "filename": "03.aac"})(),
+    ]
+    panel._bg_table = DummyTable(
+        ["/music/01.aac", "/music/02.aac", "/music/03.aac"],
+        [1, 2, 0],
+    )
+    panel._refresh_bg_table = Mock()
+
+    panel._reconcile_bg_order_after_drop()
+
+    assert [item.path for item in panel._bg_files] == [
+        "/music/02.aac",
+        "/music/03.aac",
+        "/music/01.aac",
+    ]
+    panel._refresh_bg_table.assert_called_once_with()
+
+
 def test_tracks_table_shows_language_tag_or_und(panel):
     panel._input_duration = 30.0
     panel._input_streams = [
