@@ -14,6 +14,7 @@ from src.core.processors.combat_audio import (
     build_duration_adjust_command,
     build_export_aac_command,
     build_extract_command,
+    build_mkvmerge_mux_command,
     build_mix_command,
     build_mux_command,
     build_preview_command,
@@ -374,6 +375,75 @@ class TestBuildMuxCommand:
         assert cmd[cmd.index("-fflags") + 1] == "+genpts"
         assert "-avoid_negative_ts" in cmd
         assert cmd[cmd.index("-avoid_negative_ts") + 1] == "make_zero"
+
+
+class TestBuildMkvmergeMuxCommand:
+    def test_keeps_original_audio_with_video_input(self):
+        cmd = build_mkvmerge_mux_command(
+            "/bin/mkvmerge",
+            "/video/input.mkv",
+            ["/audio/m1.aac", "/audio/m2.aac"],
+            "/output/final.mkv",
+        )
+
+        assert cmd[:6] == [
+            "/bin/mkvmerge",
+            "-o",
+            "/output/final.mkv",
+            "--no-global-tags",
+            "--no-chapters",
+            "/video/input.mkv",
+        ]
+        assert "--no-audio" not in cmd[:6]
+        assert cmd[6:] == [
+            "--no-video",
+            "--no-subtitles",
+            "--no-chapters",
+            "--no-global-tags",
+            "--default-track",
+            "0:yes",
+            "/audio/m1.aac",
+            "--no-video",
+            "--no-subtitles",
+            "--no-chapters",
+            "--no-global-tags",
+            "--default-track",
+            "0:no",
+            "/audio/m2.aac",
+        ]
+
+    def test_skips_original_audio_with_no_audio_before_video_input(self):
+        cmd = build_mkvmerge_mux_command(
+            "/bin/mkvmerge",
+            "/video/input.mkv",
+            ["/audio/m1.aac"],
+            "/output/final.mkv",
+            keep_original_audio=False,
+        )
+
+        assert cmd[:7] == [
+            "/bin/mkvmerge",
+            "-o",
+            "/output/final.mkv",
+            "--no-global-tags",
+            "--no-chapters",
+            "--no-audio",
+            "/video/input.mkv",
+        ]
+
+    def test_sets_only_first_final_audio_as_default_track(self):
+        cmd = build_mkvmerge_mux_command(
+            "/bin/mkvmerge",
+            "/video/input.mkv",
+            ["/audio/m1.aac", "/audio/m2.aac", "/audio/m3.aac"],
+            "/output/final.mkv",
+        )
+
+        default_track_indices = [i for i, value in enumerate(cmd) if value == "--default-track"]
+        assert [cmd[i + 1] for i in default_track_indices] == ["0:yes", "0:no", "0:no"]
+        assert default_track_indices[0] < cmd.index("/audio/m1.aac")
+        assert default_track_indices[1] < cmd.index("/audio/m2.aac")
+        assert default_track_indices[2] < cmd.index("/audio/m3.aac")
 
 
 class TestBuildExportAacCommand:

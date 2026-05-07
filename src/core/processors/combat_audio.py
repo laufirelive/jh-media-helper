@@ -279,6 +279,41 @@ def build_mux_command(
     return cmd
 
 
+def build_mkvmerge_mux_command(
+    mkvmerge_path: str,
+    video_path: str,
+    final_audios: list[str],
+    output_path: str,
+    *,
+    keep_original_audio: bool = True,
+) -> list[str]:
+    """Build mkvmerge command to mux video with final audio tracks."""
+    cmd = [
+        mkvmerge_path,
+        "-o",
+        output_path,
+        "--no-global-tags",
+        "--no-chapters",
+    ]
+
+    if not keep_original_audio:
+        cmd += ["--no-audio"]
+    cmd += [video_path]
+
+    for index, audio_path in enumerate(final_audios):
+        cmd += [
+            "--no-video",
+            "--no-subtitles",
+            "--no-chapters",
+            "--no-global-tags",
+            "--default-track",
+            "0:yes" if index == 0 else "0:no",
+            audio_path,
+        ]
+
+    return cmd
+
+
 def build_preview_command(
     base_audio: str,
     bg_audio: str,
