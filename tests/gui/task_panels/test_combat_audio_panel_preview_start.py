@@ -215,21 +215,54 @@ def test_tracks_table_shows_language_tag_or_und(panel):
     assert panel._tracks_table.item(1, 5).text() == "und"
 
 
-def test_secondary_group_enabled_only_for_boxed_video_input(panel):
+def test_secondary_group_stays_disabled_without_input_even_when_boxed_checked(panel):
     panel._is_pure_audio = False
     panel._boxed_checkbox.setChecked(False)
     panel._update_param_states()
 
+    assert not panel._boxed_checkbox.isEnabled()
+    assert not panel._boxed_checkbox.isChecked()
     assert not panel._secondary_group.isEnabled()
 
     panel._boxed_checkbox.setChecked(True)
     panel._update_param_states()
 
+    assert not panel._boxed_checkbox.isEnabled()
+    assert not panel._boxed_checkbox.isChecked()
+    assert not panel._secondary_group.isEnabled()
+
+
+def test_secondary_group_disables_when_input_path_is_cleared(panel):
+    panel._input_selector._edit.setText("/video/main.mkv")
+    panel._is_pure_audio = False
+    panel._boxed_checkbox.setChecked(True)
+    panel._update_param_states()
+
+    assert panel._boxed_checkbox.isEnabled()
+    assert panel._secondary_group.isEnabled()
+
+    panel._input_selector._edit.setText("")
+    panel._update_param_states()
+
+    assert not panel._boxed_checkbox.isEnabled()
+    assert not panel._boxed_checkbox.isChecked()
+    assert not panel._secondary_group.isEnabled()
+
+
+def test_secondary_group_enabled_only_for_boxed_video_input(panel):
+    panel._input_selector._edit.setText("/video/main.mkv")
+    panel._is_pure_audio = False
+    panel._boxed_checkbox.setChecked(True)
+    panel._update_param_states()
+
+    assert panel._boxed_checkbox.isEnabled()
+    assert panel._boxed_checkbox.isChecked()
     assert panel._secondary_group.isEnabled()
 
     panel._is_pure_audio = True
     panel._update_param_states()
 
+    assert not panel._boxed_checkbox.isEnabled()
     assert not panel._secondary_group.isEnabled()
     assert not panel._boxed_checkbox.isChecked()
 

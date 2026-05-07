@@ -383,7 +383,9 @@ class CombatAudioPanel(BaseTaskPanel):
 
     def _update_param_states(self):
         """Update parameter enable/disable states based on current selections."""
+        has_input = bool(self._input_selector.path())
         is_audio = self._is_pure_audio
+        is_video_input = has_input and not is_audio
         has_audio_streams = len(self._input_streams) > 0
 
         # 无音轨视频无法与原片混音：自动关闭选项并禁用，避免误选
@@ -399,11 +401,11 @@ class CombatAudioPanel(BaseTaskPanel):
         self._volume_spin.setEnabled(mix_on)
 
         # Boxed only available for video input
-        self._boxed_checkbox.setEnabled(not is_audio)
-        if is_audio:
+        self._boxed_checkbox.setEnabled(is_video_input)
+        if not is_video_input:
             self._boxed_checkbox.setChecked(False)
 
-        self._secondary_group.setEnabled((not is_audio) and self._boxed_checkbox.isChecked())
+        self._secondary_group.setEnabled(is_video_input and self._boxed_checkbox.isChecked())
 
     def _emit_preview_state(self):
         self.preview_enabled_changed.emit(self.get_preview_btn_enabled())
