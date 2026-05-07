@@ -94,6 +94,39 @@ def test_run_next_boxed_combat_audio_counts_secondary_mkv_outputs(qapp, tmp_path
     assert _FakeWorker.instances[0].started
 
 
+def test_run_next_boxed_combat_audio_without_secondaries_counts_main_mkv_output(qapp, tmp_path, monkeypatch):
+    input_path = tmp_path / "main.mkv"
+    input_path.write_bytes(b"")
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir()
+    (audio_dir / "song-1.aac").write_bytes(b"")
+    (audio_dir / "song-2.aac").write_bytes(b"")
+
+    cfg = CombatAudioConfig(
+        input_path=str(input_path),
+        audio_dir=str(audio_dir),
+        boxed=True,
+        secondary_video_paths=[],
+    )
+    mgr = QueueManager(str(tmp_path / "queue.json"))
+    mgr.add_task(_make_task(cfg))
+    _FakeWorker.instances = []
+    monkeypatch.setattr(queue_tab, "FFmpegWorker", _FakeWorker)
+    original_is_pure_audio = queue_tab.combat_audio.is_pure_audio
+    monkeypatch.setattr(
+        queue_tab.combat_audio,
+        "is_pure_audio",
+        lambda path: original_is_pure_audio(path) and path != str(input_path),
+    )
+
+    tab = QueueTab(mgr, _FakeEncoderRegistry())
+    tab._running = True
+    tab._run_next()
+
+    assert _FakeWorker.instances[0].kwargs["total_frames"] == 1
+    assert _FakeWorker.instances[0].started
+
+
 def test_run_next_non_boxed_combat_audio_uses_audio_order_count(qapp, tmp_path, monkeypatch):
     input_path = tmp_path / "main.mkv"
     input_path.write_bytes(b"")
