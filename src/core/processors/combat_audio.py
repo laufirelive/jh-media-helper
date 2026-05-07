@@ -134,6 +134,33 @@ def probe_audio_streams(file_path: str) -> list[AudioStreamInfo]:
         return []
 
 
+def probe_video_stream_count(file_path: str) -> int:
+    """Probe video stream count using ffprobe. Returns 0 on failure."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "quiet",
+                "-print_format", "json",
+                "-select_streams", "v",
+                "-show_entries", "stream=index",
+                file_path,
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        data = json.loads(result.stdout)
+        return len(data.get("streams", []))
+    except Exception:
+        return 0
+
+
+def has_video_stream(file_path: str) -> bool:
+    """Return whether the file contains at least one video stream."""
+    return probe_video_stream_count(file_path) > 0
+
+
 def run_ffmpeg_command(cmd: list[str], *, timeout: int, default_message: str) -> str | None:
     """Run ffmpeg command and return a user-facing error message on failure."""
     try:
@@ -402,6 +429,8 @@ def validate_secondary_videos(config: CombatAudioConfig, *, is_audio: bool) -> t
         if not os.path.exists(path):
             return False, f"副视频不存在: {path}"
         if is_pure_audio(path):
+            return False, f"副视频不是视频文件: {path}"
+        if not has_video_stream(path):
             return False, f"副视频不是视频文件: {path}"
 
     return True, None

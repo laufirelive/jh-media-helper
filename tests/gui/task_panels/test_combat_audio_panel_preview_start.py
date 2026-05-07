@@ -391,6 +391,37 @@ def test_validate_boxed_video_reports_missing_secondary_video(panel, tmp_path, m
     assert err == f"副视频不存在: {missing_secondary}"
 
 
+def test_validate_boxed_video_reports_non_video_secondary(panel, tmp_path, monkeypatch):
+    input_path = tmp_path / "main.mkv"
+    input_path.write_bytes(b"")
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir()
+    audio_path = audio_dir / "song.aac"
+    audio_path.write_bytes(b"")
+    secondary_path = tmp_path / "secondary.txt"
+    secondary_path.write_text("not video")
+
+    panel._input_selector._edit.setText(str(input_path))
+    panel._audio_dir_selector._edit.setText(str(audio_dir))
+    panel._is_pure_audio = False
+    panel._boxed_checkbox.setChecked(True)
+    panel._secondary_video_paths = [str(secondary_path)]
+    panel._bg_files = [type("Bg", (), {"path": str(audio_path), "filename": "song.aac", "duration": 0.0})()]
+    original_is_pure_audio = combat_audio_panel.combat_audio.is_pure_audio
+    monkeypatch.setattr(
+        combat_audio_panel.combat_audio,
+        "is_pure_audio",
+        lambda path: original_is_pure_audio(path) and path != str(input_path),
+    )
+    monkeypatch.setattr(combat_audio_panel.combat_audio, "has_video_stream", lambda path: False)
+
+    ok, count, err = panel.validate()
+
+    assert not ok
+    assert count == 0
+    assert err == f"副视频不是视频文件: {secondary_path}"
+
+
 def test_validate_boxed_video_counts_mkv_outputs(panel, tmp_path, monkeypatch):
     input_path = tmp_path / "main.mkv"
     input_path.write_bytes(b"")
@@ -414,6 +445,7 @@ def test_validate_boxed_video_counts_mkv_outputs(panel, tmp_path, monkeypatch):
         "is_pure_audio",
         lambda path: original_is_pure_audio(path) and path != str(input_path),
     )
+    monkeypatch.setattr(combat_audio_panel.combat_audio, "has_video_stream", lambda path: True)
 
     ok, count, err = panel.validate()
 

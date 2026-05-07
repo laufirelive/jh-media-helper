@@ -85,6 +85,7 @@ def test_run_next_boxed_combat_audio_counts_secondary_mkv_outputs(qapp, tmp_path
         "is_pure_audio",
         lambda path: original_is_pure_audio(path) and path != str(input_path),
     )
+    monkeypatch.setattr(queue_tab.combat_audio, "has_video_stream", lambda path: True)
 
     tab = QueueTab(mgr, _FakeEncoderRegistry())
     tab._running = True

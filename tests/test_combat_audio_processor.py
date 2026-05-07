@@ -22,6 +22,7 @@ from src.core.processors.combat_audio import (
     is_pure_audio,
     probe_audio_streams,
     probe_duration,
+    probe_video_stream_count,
     resolve_mkv_output_paths,
     resolve_output_path,
     sanitize_output_stem,
@@ -213,6 +214,30 @@ class TestProbeAudioStreams:
         mock_run.return_value.returncode = 0
         streams = probe_audio_streams("/path/to/video.mkv")
         assert streams == []
+
+
+class TestProbeVideoStreamCount:
+    @patch("subprocess.run")
+    def test_parses_ffprobe_output(self, mock_run):
+        mock_run.return_value.stdout = json.dumps({
+            "streams": [
+                {"index": 0},
+                {"index": 3},
+            ]
+        })
+        mock_run.return_value.returncode = 0
+
+        count = probe_video_stream_count("/path/to/video.mkv")
+
+        assert count == 2
+
+    @patch("subprocess.run")
+    def test_returns_zero_on_failure(self, mock_run):
+        mock_run.side_effect = FileNotFoundError()
+
+        count = probe_video_stream_count("/path/to/missing.mkv")
+
+        assert count == 0
 
 
 class TestBuildExtractCommand:
@@ -787,6 +812,24 @@ class TestValidate:
             assert ok is True
             assert err is None
 
+    def test_boxed_video_rejects_existing_non_video_secondary(self, monkeypatch):
+        monkeypatch.setattr("src.core.processors.combat_audio.has_video_stream", lambda path: False)
+        with tempfile.TemporaryDirectory() as d:
+            video_path, audio_dir = self._write_valid_inputs(d)
+            secondary_path = os.path.join(d, "secondary.txt")
+            open(secondary_path, "w").close()
+            cfg = CombatAudioConfig(
+                input_path=video_path,
+                audio_dir=audio_dir,
+                boxed=True,
+                secondary_video_paths=[secondary_path],
+            )
+
+            ok, err = validate(cfg)
+
+            assert ok is False
+            assert err == f"副视频不是视频文件: {secondary_path}"
+
 
 class TestValidateSecondaryVideos:
     def test_ignored_when_not_boxed(self):
@@ -830,7 +873,8 @@ class TestValidateSecondaryVideos:
         assert ok is True
         assert err is None
 
-    def test_existing_secondary_video_passes(self):
+    def test_existing_secondary_video_passes(self, monkeypatch):
+        monkeypatch.setattr("src.core.processors.combat_audio.has_video_stream", lambda path: True)
         with tempfile.TemporaryDirectory() as d:
             secondary_path = os.path.join(d, "secondary.mkv")
             open(secondary_path, "w").close()
@@ -845,6 +889,39 @@ class TestValidateSecondaryVideos:
 
             assert ok is True
             assert err is None
+
+    def test_existing_txt_secondary_path_is_rejected_when_boxed_video_input(self):
+        with tempfile.TemporaryDirectory() as d:
+            secondary_path = os.path.join(d, "secondary.txt")
+            open(secondary_path, "w").close()
+            cfg = CombatAudioConfig(
+                input_path="/input/video.mkv",
+                audio_dir="/audio",
+                boxed=True,
+                secondary_video_paths=[secondary_path],
+            )
+
+            ok, err = validate_secondary_videos(cfg, is_audio=False)
+
+            assert ok is False
+            assert err == f"副视频不是视频文件: {secondary_path}"
+
+    def test_audio_only_mkv_secondary_path_is_rejected_when_boxed_video_input(self, monkeypatch):
+        monkeypatch.setattr("src.core.processors.combat_audio.has_video_stream", lambda path: False)
+        with tempfile.TemporaryDirectory() as d:
+            secondary_path = os.path.join(d, "secondary.mkv")
+            open(secondary_path, "w").close()
+            cfg = CombatAudioConfig(
+                input_path="/input/video.mkv",
+                audio_dir="/audio",
+                boxed=True,
+                secondary_video_paths=[secondary_path],
+            )
+
+            ok, err = validate_secondary_videos(cfg, is_audio=False)
+
+            assert ok is False
+            assert err == f"副视频不是视频文件: {secondary_path}"
 
     def test_pure_audio_secondary_path_is_rejected_when_boxed_video_input(self):
         with tempfile.TemporaryDirectory() as d:
