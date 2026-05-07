@@ -51,3 +51,38 @@ def test_combat_audio_config_from_dict_defaults():
     assert cfg.thread_count == 1
     assert cfg.audio_stream_index == 0
     assert cfg.audio_order == []
+
+
+def test_combat_audio_config_mkvmerge_secondary_video_defaults():
+    cfg = CombatAudioConfig(input_path="/tmp/video.mkv", audio_dir="/tmp/audio")
+
+    assert cfg.secondary_video_paths == []
+    assert cfg.mkvmerge_path is None
+    assert cfg.mux_backend == "auto"
+
+
+def test_combat_audio_config_mkvmerge_secondary_video_round_trip():
+    cfg = CombatAudioConfig(
+        input_path="/tmp/video.mkv",
+        audio_dir="/tmp/audio",
+        secondary_video_paths=["/tmp/part2.mp4", "/tmp/part3.mp4"],
+        mkvmerge_path="/opt/bin/mkvmerge",
+        mux_backend="auto",
+    )
+
+    restored = CombatAudioConfig.from_dict(cfg.to_dict())
+
+    assert restored.secondary_video_paths == cfg.secondary_video_paths
+    assert restored.mkvmerge_path == "/opt/bin/mkvmerge"
+    assert restored.mux_backend == "auto"
+
+
+def test_combat_audio_config_old_dict_defaults_new_fields():
+    restored = CombatAudioConfig.from_dict({
+        "input_path": "/tmp/video.mkv",
+        "audio_dir": "/tmp/audio",
+    })
+
+    assert restored.secondary_video_paths == []
+    assert restored.mkvmerge_path is None
+    assert restored.mux_backend == "auto"
