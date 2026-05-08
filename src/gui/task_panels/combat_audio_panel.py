@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QPushButton,
     QRadioButton,
+    QScrollArea,
     QSizePolicy,
     QSpinBox,
     QTableWidget,
@@ -133,8 +134,6 @@ class CombatAudioPanel(BaseTaskPanel):
         self._audio_dir_selector.path_changed.connect(self._on_audio_dir_changed)
         left.addWidget(self._audio_dir_selector)
 
-        self._build_secondary_video_group(left)
-
         self._info_group = QGroupBox("文件信息")
         info_layout = QVBoxLayout(self._info_group)
         self._info_label = QLabel("未选择文件")
@@ -143,6 +142,8 @@ class CombatAudioPanel(BaseTaskPanel):
         self._info_label.setWordWrap(True)
         info_layout.addWidget(self._info_label)
         left.addWidget(self._info_group)
+
+        self._build_secondary_video_group(left)
 
         left.addStretch()
         parent_layout.addLayout(left, 2)
@@ -213,7 +214,16 @@ class CombatAudioPanel(BaseTaskPanel):
         self._secondary_list_layout = QVBoxLayout(self._secondary_list_widget)
         self._secondary_list_layout.setContentsMargins(0, 0, 0, 0)
         self._secondary_list_layout.setSpacing(4)
-        group_layout.addWidget(self._secondary_list_widget)
+
+        self._secondary_scroll = QScrollArea()
+        self._secondary_scroll.setWidgetResizable(True)
+        self._secondary_scroll.setMaximumHeight(160)
+        self._secondary_scroll.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Maximum,
+        )
+        self._secondary_scroll.setWidget(self._secondary_list_widget)
+        group_layout.addWidget(self._secondary_scroll)
 
         button_row = QHBoxLayout()
         button_row.setSpacing(6)

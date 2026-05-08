@@ -1,5 +1,5 @@
 import pytest
-from PyQt6.QtWidgets import QApplication, QRadioButton, QWidget
+from PyQt6.QtWidgets import QApplication, QRadioButton, QScrollArea, QWidget
 from unittest.mock import Mock
 
 from src.core.processors.combat_audio import AudioStreamInfo
@@ -360,6 +360,16 @@ def test_secondary_video_move_remove_and_clear_helpers_update_list(panel):
 
     panel._clear_secondary_videos()
     assert panel._secondary_video_paths == []
+
+
+def test_file_info_stays_above_scroll_limited_secondary_video_list(panel):
+    upper_layout = panel.layout().itemAt(0).layout()
+    left_layout = upper_layout.itemAt(0).layout()
+
+    assert isinstance(panel._secondary_scroll, QScrollArea)
+    assert panel._secondary_scroll.maximumHeight() > 0
+    assert panel._secondary_scroll.maximumHeight() <= 180
+    assert left_layout.indexOf(panel._info_group) < left_layout.indexOf(panel._secondary_group)
 
 
 def test_validate_boxed_video_reports_missing_secondary_video(panel, tmp_path, monkeypatch):
