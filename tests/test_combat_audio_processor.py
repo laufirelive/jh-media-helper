@@ -340,6 +340,13 @@ class TestBuildDurationAdjustCommand:
         assert "-t" in cmd
         assert cmd[cmd.index("-t") + 1] == "50.0"
 
+    def test_ignores_attached_cover_art_video_streams(self):
+        cmd = build_duration_adjust_command("/audio/with-cover.mp3", 100.0, 50.0, "/output/adjusted.m4a")
+
+        assert "-vn" in cmd
+        assert cmd.index("-vn") > cmd.index("/audio/with-cover.mp3")
+        assert cmd.index("-vn") < cmd.index("-c:a")
+
 
 class TestBuildMixCommand:
     def test_resets_pts_before_loudnorm(self):

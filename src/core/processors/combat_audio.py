@@ -240,6 +240,7 @@ def build_duration_adjust_command(
     cmd += [
         "-i", audio_path,
         "-t", f"{output_duration}",
+        "-vn",
         "-c:a", "aac",
         "-b:a", "192k",
         output_path,
