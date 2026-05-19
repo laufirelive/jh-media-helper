@@ -426,6 +426,35 @@ class TestBuildMuxCommand:
         assert "-disposition:a:1" not in cmd
         assert "-disposition:a:2" not in cmd
 
+    def test_maps_external_subtitle_after_audio_streams(self):
+        cmd = build_mux_command(
+            "/video/input.mkv",
+            ["/audio/m1.aac", "/audio/m2.aac"],
+            "/output/final.mkv",
+            subtitle_path="/subs/caption.srt",
+        )
+
+        assert cmd.count("-i") == 4
+        assert cmd[cmd.index("/subs/caption.srt") - 1] == "-i"
+        map_pairs = [cmd[i:i + 2] for i in range(len(cmd) - 1)]
+        assert ["-map", "0:v"] in map_pairs
+        assert ["-map", "0:s?"] in map_pairs
+        assert ["-map", "1:a"] in map_pairs
+        assert ["-map", "2:a"] in map_pairs
+        assert ["-map", "3:s:0"] in map_pairs
+        assert cmd.index("3:s:0") > cmd.index("2:a")
+
+    def test_no_external_subtitle_keeps_existing_input_count(self):
+        cmd = build_mux_command(
+            "/video/input.mkv",
+            ["/audio/m1.aac"],
+            "/output/final.mkv",
+            subtitle_path=None,
+        )
+
+        assert cmd.count("-i") == 2
+        assert "/subs/caption.srt" not in cmd
+
 
 class TestBuildMkvmergeMuxCommand:
     def test_video_input_is_first_without_audio_or_tags(self):
@@ -570,6 +599,38 @@ class TestBuildMkvmergeMuxCommand:
         assert default_track_indices[0] < cmd.index("/audio/m1.aac")
         assert default_track_indices[1] < cmd.index("/audio/m2.aac")
         assert default_track_indices[2] < cmd.index("/audio/m3.aac")
+
+    def test_appends_external_subtitle_input_segment(self):
+        cmd = build_mkvmerge_mux_command(
+            "/bin/mkvmerge",
+            "/video/input.mkv",
+            ["/audio/m1.aac"],
+            "/output/final.mkv",
+            subtitle_path="/subs/caption.ass",
+        )
+
+        subtitle_index = cmd.index("/subs/caption.ass")
+
+        assert cmd[subtitle_index - 7:subtitle_index] == [
+            "--no-video",
+            "--no-audio",
+            "--no-chapters",
+            "--no-global-tags",
+            "--no-track-tags",
+            "--default-track-flag",
+            "0:no",
+        ]
+
+    def test_no_external_subtitle_keeps_existing_tail(self):
+        cmd = build_mkvmerge_mux_command(
+            "/bin/mkvmerge",
+            "/video/input.mkv",
+            ["/audio/m1.aac"],
+            "/output/final.mkv",
+            subtitle_path=None,
+        )
+
+        assert "/subs/caption.ass" not in cmd
 
 
 class TestBuildExportAacCommand:
@@ -945,6 +1006,141 @@ class TestValidateSecondaryVideos:
 
             assert ok is False
             assert err == f"副视频不是视频文件: {secondary_path}"
+
+
+class TestValidateSubtitleFile:
+    def test_boxed_video_accepts_srt_subtitle(self, tmp_path, monkeypatch):
+        input_path = tmp_path / "main.mkv"
+        input_path.write_bytes(b"")
+        audio_dir = tmp_path / "audio"
+        audio_dir.mkdir()
+        (audio_dir / "bg.aac").write_bytes(b"")
+        subtitle_path = tmp_path / "caption.srt"
+        subtitle_path.write_text("1\n00:00:00,000 --> 00:00:01,000\nHi\n", encoding="utf-8")
+
+        monkeypatch.setattr("src.core.processors.combat_audio.has_video_stream", lambda path: True)
+
+        cfg = CombatAudioConfig(
+            input_path=str(input_path),
+            audio_dir=str(audio_dir),
+            boxed=True,
+            subtitle_path=str(subtitle_path),
+        )
+
+        ok, err = validate(cfg)
+
+        assert ok is True
+        assert err is None
+
+    def test_boxed_video_accepts_ass_subtitle(self, tmp_path, monkeypatch):
+        input_path = tmp_path / "main.mkv"
+        input_path.write_bytes(b"")
+        audio_dir = tmp_path / "audio"
+        audio_dir.mkdir()
+        (audio_dir / "bg.aac").write_bytes(b"")
+        subtitle_path = tmp_path / "caption.ass"
+        subtitle_path.write_text("[Script Info]\nTitle: Test\n", encoding="utf-8")
+
+        monkeypatch.setattr("src.core.processors.combat_audio.has_video_stream", lambda path: True)
+
+        cfg = CombatAudioConfig(
+            input_path=str(input_path),
+            audio_dir=str(audio_dir),
+            boxed=True,
+            subtitle_path=str(subtitle_path),
+        )
+
+        ok, err = validate(cfg)
+
+        assert ok is True
+        assert err is None
+
+    def test_boxed_video_rejects_missing_subtitle(self, tmp_path, monkeypatch):
+        input_path = tmp_path / "main.mkv"
+        input_path.write_bytes(b"")
+        audio_dir = tmp_path / "audio"
+        audio_dir.mkdir()
+        (audio_dir / "bg.aac").write_bytes(b"")
+        subtitle_path = tmp_path / "missing.srt"
+
+        monkeypatch.setattr("src.core.processors.combat_audio.has_video_stream", lambda path: True)
+
+        cfg = CombatAudioConfig(
+            input_path=str(input_path),
+            audio_dir=str(audio_dir),
+            boxed=True,
+            subtitle_path=str(subtitle_path),
+        )
+
+        ok, err = validate(cfg)
+
+        assert ok is False
+        assert err == f"字幕文件不存在: {subtitle_path}"
+
+    def test_boxed_video_rejects_subtitle_directory(self, tmp_path, monkeypatch):
+        input_path = tmp_path / "main.mkv"
+        input_path.write_bytes(b"")
+        audio_dir = tmp_path / "audio"
+        audio_dir.mkdir()
+        (audio_dir / "bg.aac").write_bytes(b"")
+        subtitle_path = tmp_path / "caption.srt"
+        subtitle_path.mkdir()
+
+        monkeypatch.setattr("src.core.processors.combat_audio.has_video_stream", lambda path: True)
+
+        cfg = CombatAudioConfig(
+            input_path=str(input_path),
+            audio_dir=str(audio_dir),
+            boxed=True,
+            subtitle_path=str(subtitle_path),
+        )
+
+        ok, err = validate(cfg)
+
+        assert ok is False
+        assert err == f"字幕文件不是文件: {subtitle_path}"
+
+    def test_boxed_video_rejects_unsupported_subtitle_extension(self, tmp_path, monkeypatch):
+        input_path = tmp_path / "main.mkv"
+        input_path.write_bytes(b"")
+        audio_dir = tmp_path / "audio"
+        audio_dir.mkdir()
+        (audio_dir / "bg.aac").write_bytes(b"")
+        subtitle_path = tmp_path / "caption.txt"
+        subtitle_path.write_text("not a supported subtitle", encoding="utf-8")
+
+        monkeypatch.setattr("src.core.processors.combat_audio.has_video_stream", lambda path: True)
+
+        cfg = CombatAudioConfig(
+            input_path=str(input_path),
+            audio_dir=str(audio_dir),
+            boxed=True,
+            subtitle_path=str(subtitle_path),
+        )
+
+        ok, err = validate(cfg)
+
+        assert ok is False
+        assert err == f"字幕文件格式不支持: {subtitle_path}"
+
+    def test_non_boxed_output_ignores_invalid_subtitle_path(self, tmp_path):
+        input_path = tmp_path / "main.mkv"
+        input_path.write_bytes(b"")
+        audio_dir = tmp_path / "audio"
+        audio_dir.mkdir()
+        (audio_dir / "bg.aac").write_bytes(b"")
+
+        cfg = CombatAudioConfig(
+            input_path=str(input_path),
+            audio_dir=str(audio_dir),
+            boxed=False,
+            subtitle_path=str(tmp_path / "missing.txt"),
+        )
+
+        ok, err = validate(cfg)
+
+        assert ok is True
+        assert err is None
 
 
 class TestSanitizeOutputStem:

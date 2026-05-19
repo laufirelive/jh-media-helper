@@ -86,3 +86,32 @@ def test_combat_audio_config_old_dict_defaults_new_fields():
     assert restored.secondary_video_paths == []
     assert restored.mkvmerge_path is None
     assert restored.mux_backend == "auto"
+
+
+def test_combat_audio_config_subtitle_path_defaults_to_none():
+    cfg = CombatAudioConfig(input_path="/tmp/video.mkv", audio_dir="/tmp/audio")
+
+    assert cfg.subtitle_path is None
+
+
+def test_combat_audio_config_subtitle_path_round_trip():
+    cfg = CombatAudioConfig(
+        input_path="/tmp/video.mkv",
+        audio_dir="/tmp/audio",
+        boxed=True,
+        subtitle_path="/tmp/subtitle.ass",
+    )
+
+    restored = CombatAudioConfig.from_dict(cfg.to_dict())
+
+    assert restored.subtitle_path == "/tmp/subtitle.ass"
+
+
+def test_combat_audio_config_empty_subtitle_path_normalizes_to_none():
+    restored = CombatAudioConfig.from_dict({
+        "input_path": "/tmp/video.mkv",
+        "audio_dir": "/tmp/audio",
+        "subtitle_path": "",
+    })
+
+    assert restored.subtitle_path is None

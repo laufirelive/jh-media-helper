@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from src.core.config import CombatAudioConfig
 
 PURE_AUDIO_EXTENSIONS = {".aac", ".m4a", ".mp3", ".wav", ".flac"}
+SUBTITLE_EXTENSIONS = {".srt", ".ass"}
 PREVIEW_DURATION_SECONDS = 10.0
 
 
@@ -274,12 +275,16 @@ def build_mix_command(
 def build_mux_command(
     video_path: str, mixed_audios: list[str], output_path: str,
     keep_original_audio: bool = True,
+    subtitle_path: str | None = None,
 ) -> list[str]:
     """Build ffmpeg command to mux video with multiple audio tracks."""
     cmd = ["ffmpeg", "-y", "-fflags", "+genpts", "-i", video_path]
 
     for audio in mixed_audios:
         cmd += ["-i", audio]
+
+    if subtitle_path is not None:
+        cmd += ["-i", subtitle_path]
 
     cmd += ["-map", "0:v", "-map", "0:s?"]
 
@@ -288,6 +293,10 @@ def build_mux_command(
 
     if keep_original_audio:
         cmd += ["-map", "0:a"]
+
+    if subtitle_path is not None:
+        subtitle_input_index = len(mixed_audios) + 1
+        cmd += ["-map", f"{subtitle_input_index}:s:0"]
 
     cmd += [
         "-map_metadata", "-1",
@@ -314,6 +323,7 @@ def build_mkvmerge_mux_command(
     output_path: str,
     *,
     keep_original_audio: bool = True,
+    subtitle_path: str | None = None,
 ) -> list[str]:
     """Build mkvmerge command to mux video with final audio tracks."""
     cmd = [
@@ -350,6 +360,18 @@ def build_mkvmerge_mux_command(
             "--default-track-flag",
             "-1:no",
             video_path,
+        ]
+
+    if subtitle_path is not None:
+        cmd += [
+            "--no-video",
+            "--no-audio",
+            "--no-chapters",
+            "--no-global-tags",
+            "--no-track-tags",
+            "--default-track-flag",
+            "0:no",
+            subtitle_path,
         ]
 
     return cmd
@@ -418,7 +440,11 @@ def validate(config: CombatAudioConfig) -> tuple[bool, str | None]:
         return False, f"音频文件夹为空: {config.audio_dir}"
 
     is_audio = is_pure_audio(config.input_path)
-    return validate_secondary_videos(config, is_audio=is_audio)
+    ok, err = validate_secondary_videos(config, is_audio=is_audio)
+    if not ok:
+        return ok, err
+
+    return validate_subtitle_file(config, is_audio=is_audio)
 
 
 def validate_secondary_videos(config: CombatAudioConfig, *, is_audio: bool) -> tuple[bool, str | None]:
@@ -433,6 +459,24 @@ def validate_secondary_videos(config: CombatAudioConfig, *, is_audio: bool) -> t
             return False, f"副视频不是视频文件: {path}"
         if not has_video_stream(path):
             return False, f"副视频不是视频文件: {path}"
+
+    return True, None
+
+
+def validate_subtitle_file(config: CombatAudioConfig, *, is_audio: bool) -> tuple[bool, str | None]:
+    """Validate optional subtitle file for boxed video output."""
+    if is_audio or not config.boxed or not config.subtitle_path:
+        return True, None
+
+    subtitle_path = config.subtitle_path
+    if not os.path.exists(subtitle_path):
+        return False, f"字幕文件不存在: {subtitle_path}"
+    if not os.path.isfile(subtitle_path):
+        return False, f"字幕文件不是文件: {subtitle_path}"
+
+    ext = os.path.splitext(subtitle_path)[1].lower()
+    if ext not in SUBTITLE_EXTENSIONS:
+        return False, f"字幕文件格式不支持: {subtitle_path}"
 
     return True, None
 
