@@ -83,6 +83,7 @@ class CombatAudioConfig:
     audio_stream_index: int = 0
     audio_order: list[str] | None = None
     secondary_video_paths: list[str] | None = None
+    subtitle_path: str | None = None
     mkvmerge_path: str | None = None
     mux_backend: str = "auto"
 
@@ -91,6 +92,8 @@ class CombatAudioConfig:
             self.audio_order = []
         if self.secondary_video_paths is None:
             self.secondary_video_paths = []
+        if not self.subtitle_path:
+            self.subtitle_path = None
 
     def to_dict(self) -> dict:
         return {
@@ -104,6 +107,7 @@ class CombatAudioConfig:
             "audio_stream_index": self.audio_stream_index,
             "audio_order": self.audio_order,
             "secondary_video_paths": self.secondary_video_paths,
+            "subtitle_path": self.subtitle_path,
             "mkvmerge_path": self.mkvmerge_path,
             "mux_backend": self.mux_backend,
         }
@@ -121,6 +125,7 @@ class CombatAudioConfig:
             audio_stream_index=d.get("audio_stream_index", 0),
             audio_order=d.get("audio_order", []),
             secondary_video_paths=d.get("secondary_video_paths", []),
+            subtitle_path=d.get("subtitle_path") or None,
             mkvmerge_path=d.get("mkvmerge_path"),
             mux_backend=d.get("mux_backend", "auto"),
         )

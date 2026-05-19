@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from src.core.config import CombatAudioConfig
 
 PURE_AUDIO_EXTENSIONS = {".aac", ".m4a", ".mp3", ".wav", ".flac"}
+SUBTITLE_EXTENSIONS = {".srt", ".ass"}
 PREVIEW_DURATION_SECONDS = 10.0
 
 
@@ -418,7 +419,11 @@ def validate(config: CombatAudioConfig) -> tuple[bool, str | None]:
         return False, f"音频文件夹为空: {config.audio_dir}"
 
     is_audio = is_pure_audio(config.input_path)
-    return validate_secondary_videos(config, is_audio=is_audio)
+    ok, err = validate_secondary_videos(config, is_audio=is_audio)
+    if not ok:
+        return ok, err
+
+    return validate_subtitle_file(config, is_audio=is_audio)
 
 
 def validate_secondary_videos(config: CombatAudioConfig, *, is_audio: bool) -> tuple[bool, str | None]:
@@ -433,6 +438,22 @@ def validate_secondary_videos(config: CombatAudioConfig, *, is_audio: bool) -> t
             return False, f"副视频不是视频文件: {path}"
         if not has_video_stream(path):
             return False, f"副视频不是视频文件: {path}"
+
+    return True, None
+
+
+def validate_subtitle_file(config: CombatAudioConfig, *, is_audio: bool) -> tuple[bool, str | None]:
+    """Validate optional subtitle file for boxed video output."""
+    if is_audio or not config.boxed or not config.subtitle_path:
+        return True, None
+
+    subtitle_path = config.subtitle_path
+    if not os.path.exists(subtitle_path):
+        return False, f"字幕文件不存在: {subtitle_path}"
+
+    ext = os.path.splitext(subtitle_path)[1].lower()
+    if ext not in SUBTITLE_EXTENSIONS:
+        return False, f"字幕文件格式不支持: {subtitle_path}"
 
     return True, None
 

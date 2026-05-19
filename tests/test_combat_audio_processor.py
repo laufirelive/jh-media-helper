@@ -947,6 +947,118 @@ class TestValidateSecondaryVideos:
             assert err == f"副视频不是视频文件: {secondary_path}"
 
 
+class TestValidateSubtitleFile:
+    def test_boxed_video_accepts_srt_subtitle(self, tmp_path, monkeypatch):
+        input_path = tmp_path / "main.mkv"
+        input_path.write_bytes(b"")
+        audio_dir = tmp_path / "audio"
+        audio_dir.mkdir()
+        (audio_dir / "bg.aac").write_bytes(b"")
+        subtitle_path = tmp_path / "caption.srt"
+        subtitle_path.write_text("1\n00:00:00,000 --> 00:00:01,000\nHi\n", encoding="utf-8")
+
+        monkeypatch.setattr("src.core.processors.combat_audio.has_video_stream", lambda path: True)
+
+        cfg = CombatAudioConfig(
+            input_path=str(input_path),
+            audio_dir=str(audio_dir),
+            boxed=True,
+            subtitle_path=str(subtitle_path),
+        )
+
+        ok, err = validate(cfg)
+
+        assert ok is True
+        assert err is None
+
+    def test_boxed_video_accepts_ass_subtitle(self, tmp_path, monkeypatch):
+        input_path = tmp_path / "main.mkv"
+        input_path.write_bytes(b"")
+        audio_dir = tmp_path / "audio"
+        audio_dir.mkdir()
+        (audio_dir / "bg.aac").write_bytes(b"")
+        subtitle_path = tmp_path / "caption.ass"
+        subtitle_path.write_text("[Script Info]\nTitle: Test\n", encoding="utf-8")
+
+        monkeypatch.setattr("src.core.processors.combat_audio.has_video_stream", lambda path: True)
+
+        cfg = CombatAudioConfig(
+            input_path=str(input_path),
+            audio_dir=str(audio_dir),
+            boxed=True,
+            subtitle_path=str(subtitle_path),
+        )
+
+        ok, err = validate(cfg)
+
+        assert ok is True
+        assert err is None
+
+    def test_boxed_video_rejects_missing_subtitle(self, tmp_path, monkeypatch):
+        input_path = tmp_path / "main.mkv"
+        input_path.write_bytes(b"")
+        audio_dir = tmp_path / "audio"
+        audio_dir.mkdir()
+        (audio_dir / "bg.aac").write_bytes(b"")
+        subtitle_path = tmp_path / "missing.srt"
+
+        monkeypatch.setattr("src.core.processors.combat_audio.has_video_stream", lambda path: True)
+
+        cfg = CombatAudioConfig(
+            input_path=str(input_path),
+            audio_dir=str(audio_dir),
+            boxed=True,
+            subtitle_path=str(subtitle_path),
+        )
+
+        ok, err = validate(cfg)
+
+        assert ok is False
+        assert err == f"字幕文件不存在: {subtitle_path}"
+
+    def test_boxed_video_rejects_unsupported_subtitle_extension(self, tmp_path, monkeypatch):
+        input_path = tmp_path / "main.mkv"
+        input_path.write_bytes(b"")
+        audio_dir = tmp_path / "audio"
+        audio_dir.mkdir()
+        (audio_dir / "bg.aac").write_bytes(b"")
+        subtitle_path = tmp_path / "caption.txt"
+        subtitle_path.write_text("not a supported subtitle", encoding="utf-8")
+
+        monkeypatch.setattr("src.core.processors.combat_audio.has_video_stream", lambda path: True)
+
+        cfg = CombatAudioConfig(
+            input_path=str(input_path),
+            audio_dir=str(audio_dir),
+            boxed=True,
+            subtitle_path=str(subtitle_path),
+        )
+
+        ok, err = validate(cfg)
+
+        assert ok is False
+        assert err == f"字幕文件格式不支持: {subtitle_path}"
+
+    def test_non_boxed_output_ignores_invalid_subtitle_path(self, tmp_path):
+        input_path = tmp_path / "main.mkv"
+        input_path.write_bytes(b"")
+        audio_dir = tmp_path / "audio"
+        audio_dir.mkdir()
+        (audio_dir / "bg.aac").write_bytes(b"")
+
+        cfg = CombatAudioConfig(
+            input_path=str(input_path),
+            audio_dir=str(audio_dir),
+            boxed=False,
+            subtitle_path=str(tmp_path / "missing.txt"),
+        )
+
+        ok, err = validate(cfg)
+
+        assert ok is True
+        assert err is None
+
+
 class TestSanitizeOutputStem:
     def test_replaces_cross_platform_illegal_characters(self):
         assert sanitize_output_stem('b\\c:d*e?f"g<h>i|j') == "b_c_d_e_f_g_h_i_j"
