@@ -58,7 +58,6 @@ class CombatAudioPanel(BaseTaskPanel):
         self._preview_temp_dir: str | None = None
         self._preview_cache = preview_cache
         self._secondary_video_paths: list[str] = []
-        self._subtitle_path: str | None = None
         self._mkvmerge_path: str | None = None
         self._mux_backend = "auto"
         super().__init__(parent, init_layout=False)
@@ -94,7 +93,6 @@ class CombatAudioPanel(BaseTaskPanel):
         # Connect signals for preview button auto-enable
         self._track_radio_group.buttonClicked.connect(self._on_selected_track_changed)
         self._bg_table.selectionModel().selectionChanged.connect(lambda *_: self._emit_preview_state())
-        self._update_param_states()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -204,11 +202,12 @@ class CombatAudioPanel(BaseTaskPanel):
             dialog_mode="file",
             file_filter=_SUBTITLE_FILTER,
         )
-        self._subtitle_selector.path_changed.connect(self._on_subtitle_changed)
+        self._subtitle_selector.setEnabled(False)
         subtitle_row.addWidget(self._subtitle_selector, 1)
 
         self._clear_subtitle_btn = QPushButton("清空")
         self._clear_subtitle_btn.clicked.connect(self._clear_subtitle)
+        self._clear_subtitle_btn.setEnabled(False)
         subtitle_row.addWidget(self._clear_subtitle_btn)
         out_layout.addLayout(subtitle_row)
 
@@ -607,9 +606,6 @@ class CombatAudioPanel(BaseTaskPanel):
     def _clear_secondary_videos(self) -> None:
         self._secondary_video_paths.clear()
         self._refresh_secondary_videos()
-
-    def _on_subtitle_changed(self, path: str) -> None:
-        self._subtitle_path = path or None
 
     def _clear_subtitle(self) -> None:
         self._subtitle_selector.set_path("")

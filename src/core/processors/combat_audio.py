@@ -471,6 +471,8 @@ def validate_subtitle_file(config: CombatAudioConfig, *, is_audio: bool) -> tupl
     subtitle_path = config.subtitle_path
     if not os.path.exists(subtitle_path):
         return False, f"字幕文件不存在: {subtitle_path}"
+    if not os.path.isfile(subtitle_path):
+        return False, f"字幕文件不是文件: {subtitle_path}"
 
     ext = os.path.splitext(subtitle_path)[1].lower()
     if ext not in SUBTITLE_EXTENSIONS:

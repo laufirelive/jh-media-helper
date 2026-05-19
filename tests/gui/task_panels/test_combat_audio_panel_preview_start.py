@@ -324,6 +324,28 @@ def test_subtitle_selector_disabled_initially(panel):
     assert not panel._clear_subtitle_btn.isEnabled()
 
 
+def test_default_mix_stays_enabled_after_selecting_video_with_audio(panel, tmp_path, monkeypatch):
+    input_path = tmp_path / "main.mkv"
+    input_path.write_bytes(b"")
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir()
+
+    monkeypatch.setattr(combat_audio_panel.combat_audio, "is_pure_audio", lambda path: False)
+    monkeypatch.setattr(combat_audio_panel.combat_audio, "probe_duration", lambda path: 12.0)
+    monkeypatch.setattr(
+        combat_audio_panel.combat_audio,
+        "probe_audio_streams",
+        lambda path: [_make_stream(index=1, audio_position=0, codec="aac")],
+    )
+
+    panel._audio_dir_selector._edit.setText(str(audio_dir))
+    panel._input_selector.set_path(str(input_path))
+
+    assert panel._mix_checkbox.isEnabled()
+    assert panel._mix_checkbox.isChecked()
+    assert panel.build_config().mix_enabled is True
+
+
 def test_subtitle_selector_enabled_only_for_boxed_video_input(panel, tmp_path):
     input_path = tmp_path / "main.mkv"
     input_path.write_bytes(b"")

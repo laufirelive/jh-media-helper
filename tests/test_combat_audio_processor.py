@@ -1077,6 +1077,29 @@ class TestValidateSubtitleFile:
         assert ok is False
         assert err == f"字幕文件不存在: {subtitle_path}"
 
+    def test_boxed_video_rejects_subtitle_directory(self, tmp_path, monkeypatch):
+        input_path = tmp_path / "main.mkv"
+        input_path.write_bytes(b"")
+        audio_dir = tmp_path / "audio"
+        audio_dir.mkdir()
+        (audio_dir / "bg.aac").write_bytes(b"")
+        subtitle_path = tmp_path / "caption.srt"
+        subtitle_path.mkdir()
+
+        monkeypatch.setattr("src.core.processors.combat_audio.has_video_stream", lambda path: True)
+
+        cfg = CombatAudioConfig(
+            input_path=str(input_path),
+            audio_dir=str(audio_dir),
+            boxed=True,
+            subtitle_path=str(subtitle_path),
+        )
+
+        ok, err = validate(cfg)
+
+        assert ok is False
+        assert err == f"字幕文件不是文件: {subtitle_path}"
+
     def test_boxed_video_rejects_unsupported_subtitle_extension(self, tmp_path, monkeypatch):
         input_path = tmp_path / "main.mkv"
         input_path.write_bytes(b"")
