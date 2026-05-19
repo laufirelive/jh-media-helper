@@ -319,6 +319,11 @@ def test_secondary_video_config_clears_when_not_boxed_or_pure_audio(panel):
     assert panel.build_config().secondary_video_paths == []
 
 
+def test_subtitle_selector_disabled_initially(panel):
+    assert not panel._subtitle_selector.isEnabled()
+    assert not panel._clear_subtitle_btn.isEnabled()
+
+
 def test_subtitle_selector_enabled_only_for_boxed_video_input(panel, tmp_path):
     input_path = tmp_path / "main.mkv"
     input_path.write_bytes(b"")

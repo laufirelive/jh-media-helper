@@ -94,6 +94,7 @@ class CombatAudioPanel(BaseTaskPanel):
         # Connect signals for preview button auto-enable
         self._track_radio_group.buttonClicked.connect(self._on_selected_track_changed)
         self._bg_table.selectionModel().selectionChanged.connect(lambda *_: self._emit_preview_state())
+        self._update_param_states()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
