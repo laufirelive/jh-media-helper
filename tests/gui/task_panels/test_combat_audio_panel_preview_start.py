@@ -319,6 +319,64 @@ def test_secondary_video_config_clears_when_not_boxed_or_pure_audio(panel):
     assert panel.build_config().secondary_video_paths == []
 
 
+def test_subtitle_selector_enabled_only_for_boxed_video_input(panel, tmp_path):
+    input_path = tmp_path / "main.mkv"
+    input_path.write_bytes(b"")
+    panel._input_selector._edit.setText(str(input_path))
+    panel._is_pure_audio = False
+    panel._boxed_checkbox.setChecked(True)
+    panel._update_param_states()
+
+    assert panel._subtitle_selector.isEnabled()
+    assert panel._clear_subtitle_btn.isEnabled()
+
+    panel._boxed_checkbox.setChecked(False)
+    panel._update_param_states()
+
+    assert not panel._subtitle_selector.isEnabled()
+    assert not panel._clear_subtitle_btn.isEnabled()
+
+    panel._is_pure_audio = True
+    panel._boxed_checkbox.setChecked(True)
+    panel._update_param_states()
+
+    assert not panel._subtitle_selector.isEnabled()
+    assert not panel._clear_subtitle_btn.isEnabled()
+
+
+def test_subtitle_path_written_to_config_only_when_boxed_video(panel, tmp_path):
+    input_path = tmp_path / "main.mkv"
+    input_path.write_bytes(b"")
+    subtitle_path = tmp_path / "caption.srt"
+    subtitle_path.write_text("1\n00:00:00,000 --> 00:00:01,000\nHi\n", encoding="utf-8")
+
+    panel._input_selector._edit.setText(str(input_path))
+    panel._audio_dir_selector._edit.setText("/audio")
+    panel._subtitle_selector.set_path(str(subtitle_path))
+    panel._is_pure_audio = False
+    panel._boxed_checkbox.setChecked(True)
+
+    assert panel.build_config().subtitle_path == str(subtitle_path)
+
+    panel._boxed_checkbox.setChecked(False)
+    assert panel.build_config().subtitle_path is None
+
+    panel._boxed_checkbox.setChecked(True)
+    panel._is_pure_audio = True
+    panel._update_param_states()
+    assert panel.build_config().subtitle_path is None
+
+
+def test_clear_subtitle_button_clears_subtitle_path(panel, tmp_path):
+    subtitle_path = tmp_path / "caption.ass"
+    subtitle_path.write_text("[Script Info]\nTitle: Test\n", encoding="utf-8")
+    panel._subtitle_selector.set_path(str(subtitle_path))
+
+    panel._clear_subtitle()
+
+    assert panel._subtitle_selector.path() == ""
+
+
 def test_set_mux_settings_values_are_included_in_config(panel):
     panel._input_selector._edit.setText("/video/main.mkv")
     panel._audio_dir_selector._edit.setText("/audio")

@@ -39,6 +39,7 @@ from src.gui.components.preview_start_cell import PreviewStartCell
 from src.gui.task_panels.base_panel import BaseTaskPanel
 
 _MEDIA_FILTER = "媒体文件 (*.mp4 *.mkv *.mov *.avi *.aac *.mp3 *.wav *.flac);;所有文件 (*)"
+_SUBTITLE_FILTER = "字幕文件 (*.srt *.ass);;所有文件 (*)"
 
 
 class CombatAudioPanel(BaseTaskPanel):
@@ -57,6 +58,7 @@ class CombatAudioPanel(BaseTaskPanel):
         self._preview_temp_dir: str | None = None
         self._preview_cache = preview_cache
         self._secondary_video_paths: list[str] = []
+        self._subtitle_path: str | None = None
         self._mkvmerge_path: str | None = None
         self._mux_backend = "auto"
         super().__init__(parent, init_layout=False)
@@ -192,6 +194,22 @@ class CombatAudioPanel(BaseTaskPanel):
         self._boxed_checkbox = QCheckBox("封装为 MKV")
         self._boxed_checkbox.toggled.connect(self._update_param_states)
         out_layout.addWidget(self._boxed_checkbox)
+
+        subtitle_row = QHBoxLayout()
+        subtitle_row.setSpacing(6)
+        self._subtitle_selector = FileSelector(
+            label="字幕文件:",
+            placeholder="可选，仅封装 MKV 时使用",
+            dialog_mode="file",
+            file_filter=_SUBTITLE_FILTER,
+        )
+        self._subtitle_selector.path_changed.connect(self._on_subtitle_changed)
+        subtitle_row.addWidget(self._subtitle_selector, 1)
+
+        self._clear_subtitle_btn = QPushButton("清空")
+        self._clear_subtitle_btn.clicked.connect(self._clear_subtitle)
+        subtitle_row.addWidget(self._clear_subtitle_btn)
+        out_layout.addLayout(subtitle_row)
 
         self._output_selector = FileSelector(
             label="输出目录:",
@@ -417,6 +435,10 @@ class CombatAudioPanel(BaseTaskPanel):
             self._boxed_checkbox.setChecked(False)
 
         self._secondary_group.setEnabled(is_video_input and self._boxed_checkbox.isChecked())
+        if hasattr(self, "_subtitle_selector") and hasattr(self, "_clear_subtitle_btn"):
+            subtitle_enabled = is_video_input and self._boxed_checkbox.isChecked()
+            self._subtitle_selector.setEnabled(subtitle_enabled)
+            self._clear_subtitle_btn.setEnabled(subtitle_enabled)
 
     def _emit_preview_state(self):
         self.preview_enabled_changed.emit(self.get_preview_btn_enabled())
@@ -584,6 +606,12 @@ class CombatAudioPanel(BaseTaskPanel):
     def _clear_secondary_videos(self) -> None:
         self._secondary_video_paths.clear()
         self._refresh_secondary_videos()
+
+    def _on_subtitle_changed(self, path: str) -> None:
+        self._subtitle_path = path or None
+
+    def _clear_subtitle(self) -> None:
+        self._subtitle_selector.set_path("")
 
     def _move_secondary_video(self, index: int, delta: int) -> None:
         new_index = index + delta
@@ -904,6 +932,9 @@ class CombatAudioPanel(BaseTaskPanel):
 
         boxed = self._boxed_checkbox.isChecked()
         secondary_video_paths = list(self._secondary_video_paths) if boxed and not self._is_pure_audio else []
+        subtitle_path = self._subtitle_selector.path() or None
+        if not boxed or self._is_pure_audio:
+            subtitle_path = None
 
         return CombatAudioConfig(
             input_path=input_path,
@@ -916,6 +947,7 @@ class CombatAudioPanel(BaseTaskPanel):
             audio_stream_index=selected_track,
             audio_order=audio_order,
             secondary_video_paths=secondary_video_paths,
+            subtitle_path=subtitle_path,
             mkvmerge_path=self._mkvmerge_path,
             mux_backend=self._mux_backend,
         )
