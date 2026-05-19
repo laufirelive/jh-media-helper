@@ -275,12 +275,16 @@ def build_mix_command(
 def build_mux_command(
     video_path: str, mixed_audios: list[str], output_path: str,
     keep_original_audio: bool = True,
+    subtitle_path: str | None = None,
 ) -> list[str]:
     """Build ffmpeg command to mux video with multiple audio tracks."""
     cmd = ["ffmpeg", "-y", "-fflags", "+genpts", "-i", video_path]
 
     for audio in mixed_audios:
         cmd += ["-i", audio]
+
+    if subtitle_path is not None:
+        cmd += ["-i", subtitle_path]
 
     cmd += ["-map", "0:v", "-map", "0:s?"]
 
@@ -289,6 +293,10 @@ def build_mux_command(
 
     if keep_original_audio:
         cmd += ["-map", "0:a"]
+
+    if subtitle_path is not None:
+        subtitle_input_index = len(mixed_audios) + 1
+        cmd += ["-map", f"{subtitle_input_index}:s:0"]
 
     cmd += [
         "-map_metadata", "-1",
@@ -315,6 +323,7 @@ def build_mkvmerge_mux_command(
     output_path: str,
     *,
     keep_original_audio: bool = True,
+    subtitle_path: str | None = None,
 ) -> list[str]:
     """Build mkvmerge command to mux video with final audio tracks."""
     cmd = [
@@ -351,6 +360,18 @@ def build_mkvmerge_mux_command(
             "--default-track-flag",
             "-1:no",
             video_path,
+        ]
+
+    if subtitle_path is not None:
+        cmd += [
+            "--no-video",
+            "--no-audio",
+            "--no-chapters",
+            "--no-global-tags",
+            "--no-track-tags",
+            "--default-track-flag",
+            "0:no",
+            subtitle_path,
         ]
 
     return cmd

@@ -426,6 +426,35 @@ class TestBuildMuxCommand:
         assert "-disposition:a:1" not in cmd
         assert "-disposition:a:2" not in cmd
 
+    def test_maps_external_subtitle_after_audio_streams(self):
+        cmd = build_mux_command(
+            "/video/input.mkv",
+            ["/audio/m1.aac", "/audio/m2.aac"],
+            "/output/final.mkv",
+            subtitle_path="/subs/caption.srt",
+        )
+
+        assert cmd.count("-i") == 4
+        assert cmd[cmd.index("/subs/caption.srt") - 1] == "-i"
+        map_pairs = [cmd[i:i + 2] for i in range(len(cmd) - 1)]
+        assert ["-map", "0:v"] in map_pairs
+        assert ["-map", "0:s?"] in map_pairs
+        assert ["-map", "1:a"] in map_pairs
+        assert ["-map", "2:a"] in map_pairs
+        assert ["-map", "3:s:0"] in map_pairs
+        assert cmd.index("3:s:0") > cmd.index("2:a")
+
+    def test_no_external_subtitle_keeps_existing_input_count(self):
+        cmd = build_mux_command(
+            "/video/input.mkv",
+            ["/audio/m1.aac"],
+            "/output/final.mkv",
+            subtitle_path=None,
+        )
+
+        assert cmd.count("-i") == 2
+        assert "/subs/caption.srt" not in cmd
+
 
 class TestBuildMkvmergeMuxCommand:
     def test_video_input_is_first_without_audio_or_tags(self):
@@ -570,6 +599,38 @@ class TestBuildMkvmergeMuxCommand:
         assert default_track_indices[0] < cmd.index("/audio/m1.aac")
         assert default_track_indices[1] < cmd.index("/audio/m2.aac")
         assert default_track_indices[2] < cmd.index("/audio/m3.aac")
+
+    def test_appends_external_subtitle_input_segment(self):
+        cmd = build_mkvmerge_mux_command(
+            "/bin/mkvmerge",
+            "/video/input.mkv",
+            ["/audio/m1.aac"],
+            "/output/final.mkv",
+            subtitle_path="/subs/caption.ass",
+        )
+
+        subtitle_index = cmd.index("/subs/caption.ass")
+
+        assert cmd[subtitle_index - 7:subtitle_index] == [
+            "--no-video",
+            "--no-audio",
+            "--no-chapters",
+            "--no-global-tags",
+            "--no-track-tags",
+            "--default-track-flag",
+            "0:no",
+        ]
+
+    def test_no_external_subtitle_keeps_existing_tail(self):
+        cmd = build_mkvmerge_mux_command(
+            "/bin/mkvmerge",
+            "/video/input.mkv",
+            ["/audio/m1.aac"],
+            "/output/final.mkv",
+            subtitle_path=None,
+        )
+
+        assert "/subs/caption.ass" not in cmd
 
 
 class TestBuildExportAacCommand:
