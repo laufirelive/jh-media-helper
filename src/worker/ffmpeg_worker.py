@@ -438,6 +438,7 @@ class FFmpegWorker(QThread):
                         final_paths,
                         output_path,
                         keep_original_audio=part_has_audio_streams,
+                        subtitle_path=config.subtitle_path,
                     )
                     mux_success_returncodes = (0, 1)
                 else:
@@ -446,6 +447,7 @@ class FFmpegWorker(QThread):
                         final_paths,
                         output_path,
                         keep_original_audio=part_has_audio_streams,
+                        subtitle_path=config.subtitle_path,
                     )
                     mux_success_returncodes = (0,)
                 if not self._exec_ffmpeg(
