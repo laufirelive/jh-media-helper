@@ -41,6 +41,7 @@ from src.gui.task_panels.base_panel import BaseTaskPanel
 _MEDIA_FILTER = "媒体文件 (*.mp4 *.mkv *.mov *.avi *.aac *.m4a *.mp3 *.wav *.flac);;所有文件 (*)"
 _SUBTITLE_FILTER = "字幕文件 (*.srt *.ass);;所有文件 (*)"
 _MEDIA_EXTENSIONS = {".mp4", ".mkv", ".mov", ".avi", ".aac", ".m4a", ".mp3", ".wav", ".flac"}
+_VIDEO_EXTENSIONS = {".mp4", ".mkv", ".mov", ".avi"}
 _SUBTITLE_EXTENSIONS = {".srt", ".ass"}
 
 
@@ -642,7 +643,7 @@ class CombatAudioPanel(BaseTaskPanel):
             if not os.path.isfile(path):
                 continue
             ext = os.path.splitext(path)[1].lower()
-            if ext in _MEDIA_EXTENSIONS:
+            if ext in _VIDEO_EXTENSIONS:
                 valid_paths.append(path)
         return valid_paths
 

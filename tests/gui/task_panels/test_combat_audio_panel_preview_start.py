@@ -480,16 +480,19 @@ def test_secondary_video_move_remove_and_clear_helpers_update_list(panel):
 def test_secondary_video_drop_filters_and_appends_media_files(panel, tmp_path):
     first = tmp_path / "secondary-1.mkv"
     second = tmp_path / "secondary-2.MP4"
+    audio = tmp_path / "bgm.mp3"
     ignored = tmp_path / "notes.txt"
     folder = tmp_path / "folder"
     first.write_bytes(b"")
     second.write_bytes(b"")
+    audio.write_bytes(b"")
     ignored.write_text("not media")
     folder.mkdir()
     panel._secondary_video_paths = ["/existing.mkv"]
 
     panel._append_secondary_video_drop_paths([
         str(first),
+        str(audio),
         str(ignored),
         str(folder),
         str(second),
