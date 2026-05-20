@@ -477,6 +477,41 @@ def test_secondary_video_move_remove_and_clear_helpers_update_list(panel):
     assert panel._secondary_video_paths == []
 
 
+def test_secondary_video_drop_filters_and_appends_media_files(panel, tmp_path):
+    first = tmp_path / "secondary-1.mkv"
+    second = tmp_path / "secondary-2.MP4"
+    ignored = tmp_path / "notes.txt"
+    folder = tmp_path / "folder"
+    first.write_bytes(b"")
+    second.write_bytes(b"")
+    ignored.write_text("not media")
+    folder.mkdir()
+    panel._secondary_video_paths = ["/existing.mkv"]
+
+    panel._append_secondary_video_drop_paths([
+        str(first),
+        str(ignored),
+        str(folder),
+        str(second),
+    ])
+
+    assert panel._secondary_video_paths == [
+        "/existing.mkv",
+        str(first),
+        str(second),
+    ]
+
+
+def test_secondary_video_drop_keeps_list_when_no_media_files(panel, tmp_path):
+    ignored = tmp_path / "notes.txt"
+    ignored.write_text("not media")
+    panel._secondary_video_paths = ["/existing.mkv"]
+
+    panel._append_secondary_video_drop_paths([str(ignored)])
+
+    assert panel._secondary_video_paths == ["/existing.mkv"]
+
+
 def test_file_info_stays_above_scroll_limited_secondary_video_list(panel):
     upper_layout = panel.layout().itemAt(0).layout()
     left_layout = upper_layout.itemAt(0).layout()

@@ -251,6 +251,15 @@ class CombatAudioPanel(BaseTaskPanel):
             QSizePolicy.Policy.Maximum,
         )
         self._secondary_scroll.setWidget(self._secondary_list_widget)
+        self._secondary_drop_targets = (
+            self._secondary_group,
+            self._secondary_scroll,
+            self._secondary_scroll.viewport(),
+            self._secondary_list_widget,
+        )
+        for target in self._secondary_drop_targets:
+            target.setAcceptDrops(True)
+            target.installEventFilter(self)
         group_layout.addWidget(self._secondary_scroll)
 
         button_row = QHBoxLayout()
@@ -577,9 +586,17 @@ class CombatAudioPanel(BaseTaskPanel):
         return
 
     def eventFilter(self, obj, event):
-        viewport = getattr(self._bg_table, "viewport", lambda: None)()
+        bg_table = getattr(self, "_bg_table", None)
+        viewport = getattr(bg_table, "viewport", lambda: None)()
         if obj is viewport and event.type() == QEvent.Type.Drop:
             QTimer.singleShot(0, self._reconcile_bg_order_after_drop)
+        if obj in getattr(self, "_secondary_drop_targets", ()):
+            if event.type() == QEvent.Type.DragEnter:
+                self._handle_secondary_video_drag_enter(event)
+                return True
+            if event.type() == QEvent.Type.Drop:
+                self._handle_secondary_video_drop(event)
+                return True
         return super().eventFilter(obj, event)
 
     def _reconcile_bg_order_after_drop(self) -> None:
@@ -612,6 +629,55 @@ class CombatAudioPanel(BaseTaskPanel):
             return
         self._secondary_video_paths.append(path)
         self._refresh_secondary_videos()
+
+    def _drop_local_paths(self, event) -> list[str]:
+        mime_data = event.mimeData()
+        if not mime_data.hasUrls():
+            return []
+        return [url.toLocalFile() for url in mime_data.urls() if url.isLocalFile()]
+
+    def _filter_secondary_video_drop_paths(self, paths: list[str]) -> list[str]:
+        valid_paths: list[str] = []
+        for path in paths:
+            if not os.path.isfile(path):
+                continue
+            ext = os.path.splitext(path)[1].lower()
+            if ext in _MEDIA_EXTENSIONS:
+                valid_paths.append(path)
+        return valid_paths
+
+    def _append_secondary_video_drop_paths(self, paths: list[str]) -> None:
+        valid_paths = self._filter_secondary_video_drop_paths(paths)
+        if not valid_paths:
+            return
+        self._secondary_video_paths.extend(valid_paths)
+        self._refresh_secondary_videos()
+
+    def _handle_secondary_video_drag_enter(self, event) -> None:
+        if not self._secondary_group.isEnabled():
+            event.ignore()
+            return
+        if self._filter_secondary_video_drop_paths(self._drop_local_paths(event)):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def _handle_secondary_video_drop(self, event) -> None:
+        if not self._secondary_group.isEnabled():
+            event.ignore()
+            return
+        before = len(self._secondary_video_paths)
+        self._append_secondary_video_drop_paths(self._drop_local_paths(event))
+        if len(self._secondary_video_paths) > before:
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragEnterEvent(self, event):
+        self._handle_secondary_video_drag_enter(event)
+
+    def dropEvent(self, event):
+        self._handle_secondary_video_drop(event)
 
     def _clear_secondary_videos(self) -> None:
         self._secondary_video_paths.clear()
