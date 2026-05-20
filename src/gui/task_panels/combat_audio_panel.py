@@ -38,9 +38,9 @@ from src.gui.components.file_selector import FileSelector
 from src.gui.components.preview_start_cell import PreviewStartCell
 from src.gui.task_panels.base_panel import BaseTaskPanel
 
-_MEDIA_FILTER = "媒体文件 (*.mp4 *.mkv *.mov *.avi *.aac *.mp3 *.wav *.flac);;所有文件 (*)"
+_MEDIA_FILTER = "媒体文件 (*.mp4 *.mkv *.mov *.avi *.aac *.m4a *.mp3 *.wav *.flac);;所有文件 (*)"
 _SUBTITLE_FILTER = "字幕文件 (*.srt *.ass);;所有文件 (*)"
-_MEDIA_EXTENSIONS = {".mp4", ".mkv", ".mov", ".avi", ".aac", ".mp3", ".wav", ".flac"}
+_MEDIA_EXTENSIONS = {".mp4", ".mkv", ".mov", ".avi", ".aac", ".m4a", ".mp3", ".wav", ".flac"}
 _SUBTITLE_EXTENSIONS = {".srt", ".ass"}
 
 

@@ -70,9 +70,11 @@ def test_tracks_table_adds_preview_start_column_and_activates_only_selected_row(
 
 
 def test_combat_audio_file_selectors_enable_expected_drop_modes(panel):
+    expected_media_extensions = {".mp4", ".mkv", ".mov", ".avi", ".aac", ".m4a", ".mp3", ".wav", ".flac"}
+
     assert panel._input_selector._drop_enabled
     assert panel._input_selector._drop_kind == "file"
-    assert ".mkv" in panel._input_selector._drop_file_filter
+    assert expected_media_extensions <= panel._input_selector._drop_file_filter
 
     assert panel._audio_dir_selector._drop_enabled
     assert panel._audio_dir_selector._drop_kind == "directory"
