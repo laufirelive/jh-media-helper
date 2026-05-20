@@ -40,6 +40,8 @@ from src.gui.task_panels.base_panel import BaseTaskPanel
 
 _MEDIA_FILTER = "媒体文件 (*.mp4 *.mkv *.mov *.avi *.aac *.mp3 *.wav *.flac);;所有文件 (*)"
 _SUBTITLE_FILTER = "字幕文件 (*.srt *.ass);;所有文件 (*)"
+_MEDIA_EXTENSIONS = {".mp4", ".mkv", ".mov", ".avi", ".aac", ".mp3", ".wav", ".flac"}
+_SUBTITLE_EXTENSIONS = {".srt", ".ass"}
 
 
 class CombatAudioPanel(BaseTaskPanel):
@@ -123,6 +125,9 @@ class CombatAudioPanel(BaseTaskPanel):
             placeholder="选择文件...",
             dialog_mode="file",
             file_filter=_MEDIA_FILTER,
+            drop_enabled=True,
+            drop_kind="file",
+            drop_file_filter=_MEDIA_EXTENSIONS,
         )
         self._input_selector.path_changed.connect(self._on_input_changed)
         left.addWidget(self._input_selector)
@@ -131,6 +136,8 @@ class CombatAudioPanel(BaseTaskPanel):
             label="音频目录:",
             placeholder="选择背景音乐文件夹...",
             dialog_mode="directory",
+            drop_enabled=True,
+            drop_kind="directory",
         )
         self._audio_dir_selector.path_changed.connect(self._on_audio_dir_changed)
         left.addWidget(self._audio_dir_selector)
@@ -201,6 +208,9 @@ class CombatAudioPanel(BaseTaskPanel):
             placeholder="可选，仅封装 MKV 时使用",
             dialog_mode="file",
             file_filter=_SUBTITLE_FILTER,
+            drop_enabled=True,
+            drop_kind="file",
+            drop_file_filter=_SUBTITLE_EXTENSIONS,
         )
         self._subtitle_selector.setEnabled(False)
         subtitle_row.addWidget(self._subtitle_selector, 1)

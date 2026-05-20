@@ -5,6 +5,7 @@ from unittest.mock import Mock
 from src.core.processors.combat_audio import AudioStreamInfo
 from src.gui.components.preview_start_cell import PreviewStartCell
 from src.gui.task_panels import combat_audio_panel
+from src.gui.task_panels.pic_seq_panel import PicSeqPanel
 
 
 @pytest.fixture(scope="session")
@@ -66,6 +67,33 @@ def test_tracks_table_adds_preview_start_column_and_activates_only_selected_row(
     assert _preview_cell(panel, 1).value_ms() == 0
     assert _preview_cell(panel, 0).is_active()
     assert not _preview_cell(panel, 1).is_active()
+
+
+def test_combat_audio_file_selectors_enable_expected_drop_modes(panel):
+    assert panel._input_selector._drop_enabled
+    assert panel._input_selector._drop_kind == "file"
+    assert ".mkv" in panel._input_selector._drop_file_filter
+
+    assert panel._audio_dir_selector._drop_enabled
+    assert panel._audio_dir_selector._drop_kind == "directory"
+
+    assert panel._subtitle_selector._drop_enabled
+    assert panel._subtitle_selector._drop_kind == "file"
+    assert panel._subtitle_selector._drop_file_filter == {".srt", ".ass"}
+
+
+def test_pic_seq_input_selector_accepts_directory_drop(qapp):
+    class DummyRegistry:
+        def get_best_hevc(self):
+            return None
+
+        def get_fallback(self):
+            return "libx264"
+
+    panel = PicSeqPanel(DummyRegistry())
+
+    assert panel._input_selector._drop_enabled
+    assert panel._input_selector._drop_kind == "directory"
 
 
 def test_preview_start_state_follows_selected_track_and_refreshes_active_cell(panel):
