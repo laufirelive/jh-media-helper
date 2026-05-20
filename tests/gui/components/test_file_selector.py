@@ -71,6 +71,13 @@ def test_directory_drop_accepts_single_directory(qapp, tmp_path):
     assert selector._resolve_drop_path([str(folder)]) == str(folder)
 
 
+def test_drop_enabled_selector_routes_drops_through_parent(qapp):
+    selector = FileSelector(label="Dir:", drop_enabled=True, drop_kind="directory")
+
+    assert selector.acceptDrops()
+    assert not selector._edit.acceptDrops()
+
+
 def test_directory_drop_rejects_file(qapp, tmp_path):
     file_path = tmp_path / "frame.png"
     file_path.write_bytes(b"")

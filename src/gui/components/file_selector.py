@@ -48,6 +48,7 @@ class FileSelector(QWidget):
         row = QHBoxLayout()
         row.setSpacing(6)
         self._edit = QLineEdit()
+        self._edit.setAcceptDrops(False)
         self._edit.setReadOnly(True)
         if placeholder:
             self._edit.setPlaceholderText(placeholder)
