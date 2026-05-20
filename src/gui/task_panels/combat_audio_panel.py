@@ -115,7 +115,7 @@ class CombatAudioPanel(BaseTaskPanel):
         if h <= 0:
             h = og.sizeHint().height()
         if h > 0:
-            ig.setFixedHeight(h)
+            ig.setFixedHeight(min(h, ig.maximumHeight()))
 
     def _build_upper_left(self, parent_layout: QHBoxLayout):
         left = QVBoxLayout()
@@ -149,6 +149,11 @@ class CombatAudioPanel(BaseTaskPanel):
         self._info_label.setStyleSheet("color: gray;")
         # 高度与右侧「输出设置」拉齐后，长文案在框内换行
         self._info_label.setWordWrap(True)
+        self._info_group.setMaximumHeight(120)
+        self._info_group.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Maximum,
+        )
         info_layout.addWidget(self._info_label)
         left.addWidget(self._info_group)
 

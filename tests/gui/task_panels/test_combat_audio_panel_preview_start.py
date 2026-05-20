@@ -525,6 +525,12 @@ def test_file_info_stays_above_scroll_limited_secondary_video_list(panel):
     assert left_layout.indexOf(panel._info_group) < left_layout.indexOf(panel._secondary_group)
 
 
+def test_file_info_group_has_height_limit_so_secondary_group_remains_visible(panel):
+    assert panel._info_group.maximumHeight() > 0
+    assert panel._info_group.maximumHeight() <= 130
+    assert panel._info_label.wordWrap()
+
+
 def test_validate_boxed_video_reports_missing_secondary_video(panel, tmp_path, monkeypatch):
     input_path = tmp_path / "main.mkv"
     input_path.write_bytes(b"")
