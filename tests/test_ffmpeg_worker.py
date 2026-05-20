@@ -3,7 +3,12 @@ import tempfile
 
 from src.core.config import CombatAudioConfig, TaskType
 from src.core.external_tools import MuxBackend
-from src.worker.ffmpeg_worker import FFmpegWorker, parse_progress, parse_time_progress_seconds
+from src.worker.ffmpeg_worker import (
+    FFmpegWorker,
+    parse_mkvmerge_progress_percent,
+    parse_progress,
+    parse_time_progress_seconds,
+)
 
 
 class TestParseProgress:
@@ -34,6 +39,14 @@ class TestParseTimeProgressSeconds:
         assert parse_time_progress_seconds("speed=1.25x") is None
 
 
+class TestParseMkvmergeProgressPercent:
+    def test_parse_progress_percent(self):
+        assert parse_mkvmerge_progress_percent("Progress: 42%") == 42
+
+    def test_ignore_non_progress_line(self):
+        assert parse_mkvmerge_progress_percent("Multiplexing took 10 seconds.") is None
+
+
 class TestErrorMessageFormatting:
     def test_split_error_message_returns_summary_and_details(self):
         summary, details = FFmpegWorker.split_error_message("混音失败：bgm.mp3\n\nline1\nline2")
@@ -42,12 +55,13 @@ class TestErrorMessageFormatting:
 
 
 class _FakeProcess:
-    def __init__(self, raise_timeout: bool, stderr_lines=None, returncode: int = 0):
+    def __init__(self, raise_timeout: bool, stderr_lines=None, stdout_lines=None, returncode: int = 0):
         self.raise_timeout = raise_timeout
         self.terminated = 0
         self.killed = 0
         self._polled = None
         self.stderr = iter(stderr_lines or [])
+        self.stdout = iter(stdout_lines or [])
         self.returncode = returncode
 
     def poll(self):
@@ -171,6 +185,54 @@ class TestWorkerProgress:
         worker = FFmpegWorker(TaskType.COMBAT_AUDIO, {}, encoder_registry=None)
 
         assert worker._exec_ffmpeg(["mkvmerge", "-o", "out.mkv", "in.mkv"], success_returncodes=(0, 1)) is True
+
+    def test_exec_non_ffmpeg_non_mkvmerge_does_not_pipe_unread_stdout(self, monkeypatch):
+        calls = {}
+
+        def fake_popen(cmd, stdout=None, stderr=None):
+            calls["stdout"] = stdout
+            calls["stderr"] = stderr
+            return _FakeProcess(raise_timeout=False)
+
+        monkeypatch.setattr("src.worker.ffmpeg_worker.subprocess.Popen", fake_popen)
+
+        worker = FFmpegWorker(TaskType.COMBAT_AUDIO, {}, encoder_registry=None)
+
+        assert worker._exec_ffmpeg(["other-tool", "-o", "out.mkv", "in.mkv"]) is True
+        assert calls["stdout"] is not subprocess.PIPE
+        assert calls["stderr"] is subprocess.PIPE
+
+    def test_exec_mkvmerge_emits_stdout_progress(self, monkeypatch):
+        fake = _FakeProcess(
+            raise_timeout=False,
+            stdout_lines=[
+                b"Progress: 12%\n",
+                b"Progress: 87%\n",
+            ],
+        )
+        calls = {}
+
+        def fake_popen(cmd, stdout=None, stderr=None):
+            calls["stdout"] = stdout
+            calls["stderr"] = stderr
+            return fake
+
+        monkeypatch.setattr("src.worker.ffmpeg_worker.subprocess.Popen", fake_popen)
+
+        worker = FFmpegWorker(TaskType.COMBAT_AUDIO, {}, encoder_registry=None)
+        progress_events = []
+        worker.progress.connect(lambda current, total, desc: progress_events.append((current, total, desc)))
+
+        assert worker._exec_ffmpeg(
+            ["mkvmerge", "-o", "out.mkv", "in.mkv"],
+            progress_desc="封装MKV",
+        ) is True
+        assert calls["stdout"] is subprocess.PIPE
+        assert calls["stderr"] is subprocess.STDOUT
+        assert progress_events == [
+            (12, 100, "封装MKV"),
+            (87, 100, "封装MKV"),
+        ]
 
     def test_exec_ffmpeg_keeps_default_success_as_returncode_zero_only(self, monkeypatch):
         fake = _FakeProcess(raise_timeout=False, returncode=1)
