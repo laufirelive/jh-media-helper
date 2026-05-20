@@ -1,5 +1,6 @@
 # tests/gui/components/test_file_selector.py
 import pytest
+from PyQt6.QtCore import QUrl
 from PyQt6.QtWidgets import QApplication
 
 from src.gui.components.file_selector import FileSelector
@@ -76,6 +77,32 @@ def test_drop_enabled_selector_routes_drops_through_parent(qapp):
 
     assert selector.acceptDrops()
     assert not selector._edit.acceptDrops()
+
+
+def test_local_paths_from_urls_accepts_one_local_url(qapp, tmp_path):
+    file_path = tmp_path / "clip.mkv"
+    file_path.write_bytes(b"")
+    selector = FileSelector(label="File:", drop_enabled=True, drop_kind="file")
+
+    assert selector._local_paths_from_urls([QUrl.fromLocalFile(str(file_path))]) == [
+        str(file_path)
+    ]
+
+
+def test_local_paths_from_urls_rejects_mixed_local_and_remote(qapp, tmp_path):
+    file_path = tmp_path / "clip.mkv"
+    file_path.write_bytes(b"")
+    selector = FileSelector(label="File:", drop_enabled=True, drop_kind="file")
+
+    urls = [QUrl.fromLocalFile(str(file_path)), QUrl("https://example.com/clip.mkv")]
+
+    assert selector._local_paths_from_urls(urls) == []
+
+
+def test_local_paths_from_urls_rejects_remote_only(qapp):
+    selector = FileSelector(label="File:", drop_enabled=True, drop_kind="file")
+
+    assert selector._local_paths_from_urls([QUrl("https://example.com/clip.mkv")]) == []
 
 
 def test_directory_drop_rejects_file(qapp, tmp_path):

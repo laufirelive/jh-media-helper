@@ -83,11 +83,16 @@ class FileSelector(QWidget):
             return path
         return None
 
+    def _local_paths_from_urls(self, urls) -> list[str]:
+        if len(urls) != 1 or not urls[0].isLocalFile():
+            return []
+        return [urls[0].toLocalFile()]
+
     def dragEnterEvent(self, event):
         if not self.isEnabled() or not event.mimeData().hasUrls():
             event.ignore()
             return
-        paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+        paths = self._local_paths_from_urls(event.mimeData().urls())
         if self._resolve_drop_path(paths):
             event.acceptProposedAction()
         else:
@@ -97,7 +102,7 @@ class FileSelector(QWidget):
         if not self.isEnabled() or not event.mimeData().hasUrls():
             event.ignore()
             return
-        paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+        paths = self._local_paths_from_urls(event.mimeData().urls())
         path = self._resolve_drop_path(paths)
         if path:
             self.set_path(path)
