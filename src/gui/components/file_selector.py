@@ -1,4 +1,6 @@
 # src/gui/components/file_selector.py
+import os
+
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
     QFileDialog,
@@ -23,10 +25,18 @@ class FileSelector(QWidget):
         dialog_mode: str = "directory",
         file_filter: str = "",
         parent=None,
+        *,
+        drop_enabled: bool = False,
+        drop_kind: str | None = None,
+        drop_file_filter: set[str] | None = None,
     ):
         super().__init__(parent)
         self._dialog_mode = dialog_mode
         self._file_filter = file_filter
+        self._drop_enabled = drop_enabled
+        self._drop_kind = drop_kind
+        self._drop_file_filter = {ext.lower() for ext in drop_file_filter or set()}
+        self.setAcceptDrops(drop_enabled)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -38,6 +48,7 @@ class FileSelector(QWidget):
         row = QHBoxLayout()
         row.setSpacing(6)
         self._edit = QLineEdit()
+        self._edit.setAcceptDrops(False)
         self._edit.setReadOnly(True)
         if placeholder:
             self._edit.setPlaceholderText(placeholder)
@@ -55,6 +66,49 @@ class FileSelector(QWidget):
     def set_path(self, path: str) -> None:
         self._edit.setText(path)
         self.path_changed.emit(path)
+
+    def _resolve_drop_path(self, paths: list[str]) -> str | None:
+        if not self._drop_enabled or len(paths) != 1:
+            return None
+        path = paths[0]
+        if self._drop_kind == "directory":
+            return path if os.path.isdir(path) else None
+        if self._drop_kind == "file":
+            if not os.path.isfile(path):
+                return None
+            if self._drop_file_filter:
+                ext = os.path.splitext(path)[1].lower()
+                if ext not in self._drop_file_filter:
+                    return None
+            return path
+        return None
+
+    def _local_paths_from_urls(self, urls) -> list[str]:
+        if len(urls) != 1 or not urls[0].isLocalFile():
+            return []
+        return [urls[0].toLocalFile()]
+
+    def dragEnterEvent(self, event):
+        if not self.isEnabled() or not event.mimeData().hasUrls():
+            event.ignore()
+            return
+        paths = self._local_paths_from_urls(event.mimeData().urls())
+        if self._resolve_drop_path(paths):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        if not self.isEnabled() or not event.mimeData().hasUrls():
+            event.ignore()
+            return
+        paths = self._local_paths_from_urls(event.mimeData().urls())
+        path = self._resolve_drop_path(paths)
+        if path:
+            self.set_path(path)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
     def _browse(self) -> None:
         if self._dialog_mode == "directory":

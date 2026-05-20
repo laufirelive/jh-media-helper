@@ -38,6 +38,8 @@ class PicSeqPanel(BaseTaskPanel):
             label="图片序列文件夹:",
             placeholder="选择文件夹...",
             dialog_mode="directory",
+            drop_enabled=True,
+            drop_kind="directory",
         )
         self._input_selector.path_changed.connect(self._on_input_changed)
         layout.addWidget(self._input_selector)

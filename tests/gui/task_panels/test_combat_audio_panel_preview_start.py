@@ -5,6 +5,7 @@ from unittest.mock import Mock
 from src.core.processors.combat_audio import AudioStreamInfo
 from src.gui.components.preview_start_cell import PreviewStartCell
 from src.gui.task_panels import combat_audio_panel
+from src.gui.task_panels.pic_seq_panel import PicSeqPanel
 
 
 @pytest.fixture(scope="session")
@@ -66,6 +67,35 @@ def test_tracks_table_adds_preview_start_column_and_activates_only_selected_row(
     assert _preview_cell(panel, 1).value_ms() == 0
     assert _preview_cell(panel, 0).is_active()
     assert not _preview_cell(panel, 1).is_active()
+
+
+def test_combat_audio_file_selectors_enable_expected_drop_modes(panel):
+    expected_media_extensions = {".mp4", ".mkv", ".mov", ".avi", ".aac", ".m4a", ".mp3", ".wav", ".flac"}
+
+    assert panel._input_selector._drop_enabled
+    assert panel._input_selector._drop_kind == "file"
+    assert expected_media_extensions <= panel._input_selector._drop_file_filter
+
+    assert panel._audio_dir_selector._drop_enabled
+    assert panel._audio_dir_selector._drop_kind == "directory"
+
+    assert panel._subtitle_selector._drop_enabled
+    assert panel._subtitle_selector._drop_kind == "file"
+    assert panel._subtitle_selector._drop_file_filter == {".srt", ".ass"}
+
+
+def test_pic_seq_input_selector_accepts_directory_drop(qapp):
+    class DummyRegistry:
+        def get_best_hevc(self):
+            return None
+
+        def get_fallback(self):
+            return "libx264"
+
+    panel = PicSeqPanel(DummyRegistry())
+
+    assert panel._input_selector._drop_enabled
+    assert panel._input_selector._drop_kind == "directory"
 
 
 def test_preview_start_state_follows_selected_track_and_refreshes_active_cell(panel):
@@ -447,6 +477,44 @@ def test_secondary_video_move_remove_and_clear_helpers_update_list(panel):
     assert panel._secondary_video_paths == []
 
 
+def test_secondary_video_drop_filters_and_appends_media_files(panel, tmp_path):
+    first = tmp_path / "secondary-1.mkv"
+    second = tmp_path / "secondary-2.MP4"
+    audio = tmp_path / "bgm.mp3"
+    ignored = tmp_path / "notes.txt"
+    folder = tmp_path / "folder"
+    first.write_bytes(b"")
+    second.write_bytes(b"")
+    audio.write_bytes(b"")
+    ignored.write_text("not media")
+    folder.mkdir()
+    panel._secondary_video_paths = ["/existing.mkv"]
+
+    panel._append_secondary_video_drop_paths([
+        str(first),
+        str(audio),
+        str(ignored),
+        str(folder),
+        str(second),
+    ])
+
+    assert panel._secondary_video_paths == [
+        "/existing.mkv",
+        str(first),
+        str(second),
+    ]
+
+
+def test_secondary_video_drop_keeps_list_when_no_media_files(panel, tmp_path):
+    ignored = tmp_path / "notes.txt"
+    ignored.write_text("not media")
+    panel._secondary_video_paths = ["/existing.mkv"]
+
+    panel._append_secondary_video_drop_paths([str(ignored)])
+
+    assert panel._secondary_video_paths == ["/existing.mkv"]
+
+
 def test_file_info_stays_above_scroll_limited_secondary_video_list(panel):
     upper_layout = panel.layout().itemAt(0).layout()
     left_layout = upper_layout.itemAt(0).layout()
@@ -455,6 +523,12 @@ def test_file_info_stays_above_scroll_limited_secondary_video_list(panel):
     assert panel._secondary_scroll.maximumHeight() > 0
     assert panel._secondary_scroll.maximumHeight() <= 180
     assert left_layout.indexOf(panel._info_group) < left_layout.indexOf(panel._secondary_group)
+
+
+def test_file_info_group_has_height_limit_so_secondary_group_remains_visible(panel):
+    assert panel._info_group.maximumHeight() > 0
+    assert panel._info_group.maximumHeight() <= 130
+    assert panel._info_label.wordWrap()
 
 
 def test_validate_boxed_video_reports_missing_secondary_video(panel, tmp_path, monkeypatch):

@@ -18,6 +18,7 @@ from src.core.processors import combat_audio, pic_seq
 
 _FRAME_RE = re.compile(r"frame=\s*(\d+)")
 _OUT_TIME_RE = re.compile(r"out_time_(?:us|ms)=(\d+)")
+_MKVMERGE_PROGRESS_RE = re.compile(r"Progress:\s*(\d+)%")
 
 
 def parse_progress(line: str) -> int | None:
@@ -35,6 +36,14 @@ def parse_time_progress_seconds(line: str) -> float | None:
         return None
     # FFmpeg reports these values in microseconds for progress output.
     return int(m.group(1)) / 1_000_000.0
+
+
+def parse_mkvmerge_progress_percent(line: str) -> int | None:
+    """Extract mkvmerge progress percentage from stdout line."""
+    m = _MKVMERGE_PROGRESS_RE.search(line)
+    if not m:
+        return None
+    return max(0, min(100, int(m.group(1))))
 
 
 class FFmpegWorker(QThread):
@@ -95,6 +104,7 @@ class FFmpegWorker(QThread):
             "drop_frames=",
             "speed=",
             "progress=",
+            "Progress:",
         )
         return line.startswith(prefixes)
 
@@ -172,6 +182,12 @@ class FFmpegWorker(QThread):
             return cmd
         return [cmd[0], "-progress", "pipe:2", "-nostats", *cmd[1:]]
 
+    @staticmethod
+    def _command_basename(cmd: list[str]) -> str:
+        if not cmd:
+            return ""
+        return os.path.basename(cmd[0])
+
     def _run_ffmpeg_process(
         self,
         cmd: list[str],
@@ -183,18 +199,24 @@ class FFmpegWorker(QThread):
         success_returncodes: tuple[int, ...] = (0,),
     ) -> bool:
         effective_cmd = self._with_progress_args(cmd)
+        command_name = self._command_basename(effective_cmd)
+        is_ffmpeg = command_name == "ffmpeg"
+        is_mkvmerge = command_name == "mkvmerge"
         error_tail: deque[str] = deque(maxlen=8)
+        stdout_target = subprocess.PIPE if is_ffmpeg or is_mkvmerge else subprocess.DEVNULL
+        stderr_target = subprocess.STDOUT if is_mkvmerge else subprocess.PIPE
         process = subprocess.Popen(
             effective_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=stdout_target,
+            stderr=stderr_target,
         )
         if track_main_process:
             self._process = process
 
         last_time_pct = -1
         try:
-            for raw_line in process.stderr:
+            output_stream = process.stdout if is_mkvmerge else process.stderr
+            for raw_line in output_stream:
                 if self._cancel_event.is_set():
                     process.terminate()
                     try:
@@ -213,6 +235,12 @@ class FFmpegWorker(QThread):
                     frame = parse_progress(line)
                     if frame is not None and track_main_process:
                         self.progress.emit(frame, self._total_frames, "编码中")
+                    mkvmerge_pct = parse_mkvmerge_progress_percent(line)
+                    if mkvmerge_pct is not None:
+                        if progress_callback is not None:
+                            progress_callback(mkvmerge_pct)
+                        else:
+                            self.progress.emit(mkvmerge_pct, 100, progress_desc)
                     if progress_total and progress_total > 0:
                         seconds = parse_time_progress_seconds(line)
                         if seconds is None:

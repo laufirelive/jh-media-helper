@@ -1,5 +1,6 @@
 # tests/gui/components/test_file_selector.py
 import pytest
+from PyQt6.QtCore import QUrl
 from PyQt6.QtWidgets import QApplication
 
 from src.gui.components.file_selector import FileSelector
@@ -53,3 +54,114 @@ def test_file_mode(qapp):
     s = FileSelector(label="File:", dialog_mode="file", file_filter="Videos (*.mp4)")
     assert s._dialog_mode == "file"
     assert s._file_filter == "Videos (*.mp4)"
+
+
+def test_drop_disabled_by_default_rejects_path(qapp, tmp_path):
+    folder = tmp_path / "seq"
+    folder.mkdir()
+    selector = FileSelector(label="Dir:")
+
+    assert selector._resolve_drop_path([str(folder)]) is None
+
+
+def test_directory_drop_accepts_single_directory(qapp, tmp_path):
+    folder = tmp_path / "seq"
+    folder.mkdir()
+    selector = FileSelector(label="Dir:", drop_enabled=True, drop_kind="directory")
+
+    assert selector._resolve_drop_path([str(folder)]) == str(folder)
+
+
+def test_drop_enabled_selector_routes_drops_through_parent(qapp):
+    selector = FileSelector(label="Dir:", drop_enabled=True, drop_kind="directory")
+
+    assert selector.acceptDrops()
+    assert not selector._edit.acceptDrops()
+
+
+def test_local_paths_from_urls_accepts_one_local_url(qapp, tmp_path):
+    file_path = tmp_path / "clip.mkv"
+    file_path.write_bytes(b"")
+    selector = FileSelector(label="File:", drop_enabled=True, drop_kind="file")
+
+    assert selector._local_paths_from_urls([QUrl.fromLocalFile(str(file_path))]) == [
+        str(file_path)
+    ]
+
+
+def test_local_paths_from_urls_rejects_mixed_local_and_remote(qapp, tmp_path):
+    file_path = tmp_path / "clip.mkv"
+    file_path.write_bytes(b"")
+    selector = FileSelector(label="File:", drop_enabled=True, drop_kind="file")
+
+    urls = [QUrl.fromLocalFile(str(file_path)), QUrl("https://example.com/clip.mkv")]
+
+    assert selector._local_paths_from_urls(urls) == []
+
+
+def test_local_paths_from_urls_rejects_remote_only(qapp):
+    selector = FileSelector(label="File:", drop_enabled=True, drop_kind="file")
+
+    assert selector._local_paths_from_urls([QUrl("https://example.com/clip.mkv")]) == []
+
+
+def test_directory_drop_rejects_file(qapp, tmp_path):
+    file_path = tmp_path / "frame.png"
+    file_path.write_bytes(b"")
+    selector = FileSelector(label="Dir:", drop_enabled=True, drop_kind="directory")
+
+    assert selector._resolve_drop_path([str(file_path)]) is None
+
+
+def test_file_drop_accepts_single_file(qapp, tmp_path):
+    file_path = tmp_path / "clip.mkv"
+    file_path.write_bytes(b"")
+    selector = FileSelector(label="File:", drop_enabled=True, drop_kind="file")
+
+    assert selector._resolve_drop_path([str(file_path)]) == str(file_path)
+
+
+def test_file_drop_rejects_directory(qapp, tmp_path):
+    folder = tmp_path / "audio"
+    folder.mkdir()
+    selector = FileSelector(label="File:", drop_enabled=True, drop_kind="file")
+
+    assert selector._resolve_drop_path([str(folder)]) is None
+
+
+def test_file_drop_filter_rejects_unlisted_extension(qapp, tmp_path):
+    file_path = tmp_path / "notes.txt"
+    file_path.write_text("not media")
+    selector = FileSelector(
+        label="File:",
+        drop_enabled=True,
+        drop_kind="file",
+        drop_file_filter={".mkv", ".mp4"},
+    )
+
+    assert selector._resolve_drop_path([str(file_path)]) is None
+
+
+def test_file_drop_filter_accepts_case_insensitive_extension(qapp, tmp_path):
+    file_path = tmp_path / "CAPTION.SRT"
+    file_path.write_text("1")
+    selector = FileSelector(
+        label="Subtitle:",
+        drop_enabled=True,
+        drop_kind="file",
+        drop_file_filter={".srt", ".ass"},
+    )
+
+    assert selector._resolve_drop_path([str(file_path)]) == str(file_path)
+
+
+def test_single_value_drop_rejects_multiple_paths(qapp, tmp_path):
+    first = tmp_path / "one.mkv"
+    second = tmp_path / "two.mkv"
+    first.write_bytes(b"")
+    second.write_bytes(b"")
+    selector = FileSelector(label="File:", drop_enabled=True, drop_kind="file")
+    selector.set_path("/existing.mkv")
+
+    assert selector._resolve_drop_path([str(first), str(second)]) is None
+    assert selector.path() == "/existing.mkv"
